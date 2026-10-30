@@ -202,7 +202,7 @@ export function criarBot(
         if (!google) return "Google Agenda não configurado. Crie os segredos GOOGLE_SERVICE_ACCOUNT e GOOGLE_CALENDAR_ID na função do Supabase.";
         try {
           const n = (await google.listar(momento, new Date(momento.getTime() + 7 * 86400000))).length;
-          return `Google Agenda conectado. ${n === 1 ? "1 evento" : `${n} eventos`} seu(s) nos próximos 7 dias (fora os marcados por mim).`;
+          return `Google Agenda conectado. ${n === 1 ? "1 evento" : `${n} eventos`} nos próximos 7 dias (sem contar os marcados por mim).`;
         } catch (e) {
           log("Google Agenda (teste)", e instanceof Error ? e.message : String(e));
           return `Não consegui acessar o Google Agenda: ${motivo(e)}`;
