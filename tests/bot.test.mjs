@@ -154,6 +154,28 @@ test("Google Agenda fora do ar: o bot continua funcionando e avisa", async () =>
   assert.equal(await semGoogle.tratar("agendar amanhã 10h dentista"), "Agendado: dentista\nsáb 31/10 às 10:00. Aviso 2h antes.");
 });
 
+test("vários comandos numa mensagem, um por linha", async () => {
+  const b = bancoFalso(), bot = criarBot(b, () => AGORA, null, () => {});
+  const r = await bot.tratar("*agendar 07/11 20h Shamah: Vila Belemzinho, Bujaru*\n\n- agendar 20/11 19:30 Mãe da Divina Providência\nAGENDA SHAMAH\nnota levar violão\noi\ndesmarcar 1");
+  assert.equal(r, [
+    "Agendado: Shamah: Vila Belemzinho, Bujaru\nsáb 07/11 às 20:00. Aviso 2h antes.",
+    "Agendado: Mãe da Divina Providência\nsex 20/11 às 19:30. Aviso 2h antes.",
+    '"AGENDA SHAMAH": Use: agenda, agenda amanhã, agenda semana, agenda sexta ou agenda 15/11',
+    "Anotado.",
+    'Não entendi: "oi"',
+    '"desmarcar 1": mande este sozinho (os números da lista mudam a cada um).',
+  ].join("\n\n"));
+  assert.equal(b.compromissos.length, 2);
+  assert.equal(b.compromissos[0].titulo, "Shamah: Vila Belemzinho, Bujaru", "sem os asteriscos do WhatsApp");
+  // Nota com várias linhas continua sendo uma nota só
+  assert.equal(await bot.tratar("nota compras\nleite\nlembrar de pão"), "Anotado.");
+  assert.equal(b.notas.at(-1).texto, "compras leite lembrar de pão");
+  // Texto comum com uma linha de comando: comportamento de sempre
+  assert.match(await bot.tratar("oi\ntudo bem?"), /Não entendi\. Mande \/ajuda/);
+  // Limite de linhas
+  assert.match(await bot.tratar(Array(21).fill("nota x").join("\n").replace(/^nota x/, "lembrar em 5 min x")), /até 20 comandos/);
+});
+
 // ---------- Seguranca das chamadas HTTP ----------
 const TOKEN = "123456:ABC-token-de-teste", DONO = "987654321";
 async function montar(extra = {}) {

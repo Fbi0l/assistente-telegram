@@ -21,6 +21,8 @@ Bot pessoal para **lembretes**, **agenda** (ligada ao Google Agenda) e **anotaç
 | `/notas` · `buscar café` · `apagar 3` | Lista · procura · apaga a nº 3 |
 | `/ajuda` | Mostra os exemplos |
 
+Vários comandos de uma vez: um por linha na mesma mensagem (até 20). `cancelar`, `apagar` e `desmarcar` vão sozinhos, porque os números da lista mudam a cada um.
+
 Horários sempre no fuso de Fortaleza (UTC-3).
 
 ## Google Agenda (opcional)

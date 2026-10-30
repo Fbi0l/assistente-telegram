@@ -1,6 +1,6 @@
 // Logica do assistente: transforma comandos em acoes e respostas.
 // Nao conhece o Telegram nem o Supabase diretamente (recebe "banco" e "enviar"), para ser testavel.
-import { formatarDia, formatarDuracao, formatarHora, formatarQuando, interpretar } from "./interpretar.ts";
+import { formatarDia, formatarDuracao, formatarHora, formatarQuando, interpretar, normalizar, type Comando } from "./interpretar.ts";
 import { ErroGoogle, type AgendaExterna } from "./google.ts";
 
 export type Lembrete = { id: string; texto: string; quando: Date };
@@ -26,6 +26,11 @@ export interface Banco {
 }
 
 export const LISTA_MAX = 20;
+export const LOTE_MAX = 20; // comandos por mensagem (um por linha)
+const TELEGRAM_MAX = 4000;
+// Na mensagem com varias linhas, estes ficam de fora: os numeros da lista mudam a cada um.
+const SO_UM_POR_VEZ = new Set(["cancelar", "apagar", "desmarcar"]);
+const NOTA = /^\/?(nota|anota|anotar|anote):?$/;
 
 export const AJUDA = [
   "Sou seu assistente. O que eu entendo:",
@@ -51,6 +56,8 @@ export const AJUDA = [
   "/notas — últimas notas",
   "buscar café — procura nas notas",
   "apagar 3 — apaga a nº 3 de /notas",
+  "",
+  "Vários de uma vez: um comando por linha na mesma mensagem.",
 ].join("\n");
 
 const numerada = (itens: string[]) => itens.map((t, i) => `${i + 1}. ${t}`).join("\n");
@@ -97,9 +104,31 @@ export function criarBot(
   const rodape = (itens: ItemAgenda[], aviso: string) =>
     [itens.some((x) => x.id.startsWith("google:")) ? NOTA_GOOGLE : "", aviso].filter(Boolean).map((t) => `\n\n${t}`).join("");
 
+  // Varias linhas com comandos: executa um por linha, na ordem. Nota com varias linhas continua sendo uma nota so.
   async function tratar(mensagem: string): Promise<string> {
     const momento = agora();
-    const c = interpretar(mensagem, momento);
+    const linhas = mensagem.split(/\r?\n/).map((l) => l.trim().replace(/^[-•]\s+/, "").replace(/^\*+|\*+$/g, "").trim()).filter(Boolean);
+    const primeira = normalizar(linhas[0]?.split(/\s+/)[0] ?? "");
+    if (linhas.length < 2 || NOTA.test(primeira)) return executar(interpretar(mensagem, momento), momento);
+    const comandos = linhas.map((l) => ({ linha: l, c: interpretar(l, momento) }));
+    if (comandos.filter((x) => x.c.tipo !== "desconhecido").length < 2) return executar(interpretar(mensagem, momento), momento);
+    if (linhas.length > LOTE_MAX) return `Mande até ${LOTE_MAX} comandos por mensagem (um por linha).`;
+    const respostas: string[] = [];
+    for (const { linha, c } of comandos) {
+      if (c.tipo === "desconhecido") { respostas.push(`Não entendi: "${linha.slice(0, 80)}"`); continue; }
+      if (c.tipo === "erro") { respostas.push(`"${linha.slice(0, 80)}": ${c.mensagem}`); continue; }
+      if (SO_UM_POR_VEZ.has(c.tipo)) { respostas.push(`"${linha.slice(0, 80)}": mande este sozinho (os números da lista mudam a cada um).`); continue; }
+      try { respostas.push(await executar(c, momento)); }
+      catch (e) {
+        log("Falha em comando do lote", e instanceof Error ? e.message : String(e));
+        respostas.push(`Tive um problema com: "${linha.slice(0, 80)}". Tente de novo.`);
+      }
+    }
+    const texto = respostas.join("\n\n");
+    return texto.length > TELEGRAM_MAX ? texto.slice(0, TELEGRAM_MAX - 20) + "\n\n(resposta cortada)" : texto;
+  }
+
+  async function executar(c: Comando, momento: Date): Promise<string> {
     switch (c.tipo) {
       case "ajuda":
         return AJUDA;
