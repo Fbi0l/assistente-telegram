@@ -1,9 +1,10 @@
 // Logica do assistente: transforma comandos em acoes e respostas.
 // Nao conhece o Telegram nem o Supabase diretamente (recebe "banco" e "enviar"), para ser testavel.
-import { formatarQuando, interpretar } from "./interpretar.ts";
+import { formatarDia, formatarDuracao, formatarHora, formatarQuando, interpretar } from "./interpretar.ts";
 
 export type Lembrete = { id: string; texto: string; quando: Date };
 export type Nota = { id: string; texto: string; criado_em: Date };
+export type Compromisso = { id: string; titulo: string; inicio: Date };
 
 export interface Banco {
   criarLembrete(quando: Date, texto: string): Promise<void>;
@@ -15,6 +16,11 @@ export interface Banco {
   apagarNota(id: string): Promise<boolean>;
   reivindicarLembretes(limite: number): Promise<Lembrete[]>; // marca como enviados (atomico)
   liberarLembrete(id: string): Promise<void>; // envio falhou: tenta de novo no proximo minuto
+  // Agenda: o aviso do compromisso e um lembrete criado na mesma transacao.
+  criarCompromisso(inicio: Date, titulo: string, avisoEm: Date | null, textoAviso: string): Promise<void>;
+  compromissosEntre(de: Date, ate: Date): Promise<Compromisso[]>; // ordem: inicio crescente
+  proximosCompromissos(desde: Date, limite: number): Promise<Compromisso[]>;
+  desmarcarCompromisso(id: string): Promise<boolean>; // tambem cancela o aviso ainda nao enviado
 }
 
 export const LISTA_MAX = 20;
@@ -30,6 +36,13 @@ export const AJUDA = [
   "/lembretes — lista os próximos",
   "cancelar 2 — cancela o nº 2 da lista",
   "",
+  "AGENDA (aviso 2h antes)",
+  "agendar sexta 14h reunião com João",
+  "agendar amanhã 10h dentista avisar 30 min antes",
+  "agendar 20/11 19h jantar sem aviso",
+  "/agenda — hoje · agenda amanhã · agenda semana",
+  "/compromissos — próximos · desmarcar 2",
+  "",
   "ANOTAÇÕES",
   "nota comprar filtro de café",
   "/notas — últimas notas",
@@ -39,9 +52,23 @@ export const AJUDA = [
 
 const numerada = (itens: string[]) => itens.map((t, i) => `${i + 1}. ${t}`).join("\n");
 
+// Compromissos agrupados por dia; o numero e a posicao em /compromissos (usado por "desmarcar N").
+function listarAgenda(itens: Compromisso[], numeroDe: Map<string, number>): string {
+  const linhas: string[] = [];
+  let diaAtual = "";
+  for (const c of itens) {
+    const dia = formatarDia(c.inicio);
+    if (dia !== diaAtual) { if (linhas.length) linhas.push(""); linhas.push(dia); diaAtual = dia; }
+    const n = numeroDe.get(c.id);
+    linhas.push(`${n ? `${n}.` : "•"} ${formatarHora(c.inicio)} — ${c.titulo}`);
+  }
+  return linhas.join("\n");
+}
+
 export function criarBot(banco: Banco, agora: () => Date = () => new Date()) {
   async function tratar(mensagem: string): Promise<string> {
-    const c = interpretar(mensagem, agora());
+    const momento = agora();
+    const c = interpretar(mensagem, momento);
     switch (c.tipo) {
       case "ajuda":
         return AJUDA;
@@ -83,6 +110,38 @@ export function criarBot(banco: Banco, agora: () => Date = () => new Date()) {
         const alvo = n[c.numero - 1];
         if (!alvo) return `Não há nota nº ${c.numero}. Veja a lista em /notas.`;
         return (await banco.apagarNota(alvo.id)) ? `Apagada: ${alvo.texto}` : "Essa nota já tinha sido apagada.";
+      }
+      case "agendar": {
+        let avisoEm: Date | null = null, sobreAviso = "Sem aviso.";
+        if (c.avisoMin !== null) {
+          const quando = new Date(c.inicio.getTime() - c.avisoMin * 60000);
+          if (quando > momento) { avisoEm = quando; sobreAviso = `Aviso ${formatarDuracao(c.avisoMin)} antes.`; }
+          else sobreAviso = `Sem aviso: faltam menos de ${formatarDuracao(c.avisoMin)}.`;
+        }
+        const textoAviso = `daqui a ${c.avisoMin === null ? "" : formatarDuracao(c.avisoMin)}: ${c.titulo} (${formatarQuando(c.inicio)})`;
+        await banco.criarCompromisso(c.inicio, c.titulo, avisoEm, textoAviso);
+        return `Agendado: ${c.titulo}\n${formatarQuando(c.inicio)}. ${sobreAviso}`;
+      }
+      case "compromissos": {
+        const p = await banco.proximosCompromissos(momento, LISTA_MAX);
+        if (!p.length) return "Nenhum compromisso marcado.";
+        return "Próximos compromissos:\n" + listarAgenda(p, new Map(p.map((x, i) => [x.id, i + 1])));
+      }
+      case "agenda": {
+        const [itens, proximos] = await Promise.all([
+          banco.compromissosEntre(c.de, c.ate),
+          banco.proximosCompromissos(momento, LISTA_MAX),
+        ]);
+        if (!itens.length) return `${c.rotulo}: nenhum compromisso.`;
+        return `${c.rotulo}:\n` + listarAgenda(itens, new Map(proximos.map((x, i) => [x.id, i + 1])));
+      }
+      case "desmarcar": {
+        const p = await banco.proximosCompromissos(momento, LISTA_MAX);
+        const alvo = p[c.numero - 1];
+        if (!alvo) return `Não há compromisso nº ${c.numero}. Veja a lista em /compromissos.`;
+        return (await banco.desmarcarCompromisso(alvo.id))
+          ? `Desmarcado: ${alvo.titulo} (${formatarQuando(alvo.inicio)})`
+          : "Esse compromisso já tinha sido desmarcado.";
       }
     }
   }

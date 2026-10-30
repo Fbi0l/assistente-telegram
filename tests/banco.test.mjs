@@ -9,9 +9,11 @@ async function banco() {
   await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role BYPASSRLS;
     GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
     CREATE SCHEMA vault; CREATE TABLE vault.decrypted_secrets(name text, decrypted_secret text);`);
-  const sql = readFileSync(new URL("../supabase/migrations/0001_inicial.sql", import.meta.url), "utf8");
-  await db.exec(sql);
-  await db.exec(sql); // reaplicar nao quebra
+  for (const f of ["0001_inicial.sql", "0003_agenda.sql"]) {
+    const sql = readFileSync(new URL(`../supabase/migrations/${f}`, import.meta.url), "utf8");
+    await db.exec(sql);
+    await db.exec(sql); // reaplicar nao quebra
+  }
   return db;
 }
 const comoPapel = async (db, papel, fn) => { await db.exec(`SET ROLE ${papel}`); try { return await fn(); } finally { await db.exec("RESET ROLE"); } };
@@ -66,4 +68,31 @@ test("segredo do agendador vem do Vault", async () => {
   assert.equal(await comoPapel(db, "service_role", () => n(db, "SELECT public.segredo_cron()")), null);
   await db.query("INSERT INTO vault.decrypted_secrets VALUES ('bot_cron_secret','abc123')");
   assert.equal(await comoPapel(db, "service_role", () => n(db, "SELECT public.segredo_cron()")), "abc123");
+});
+
+test("agenda: compromisso e aviso juntos; desmarcar cancela o aviso pendente", async () => {
+  const db = await banco();
+  const sr = (q, p) => comoPapel(db, "service_role", () => db.query(q, p));
+  await comoPapel(db, "anon", () => assert.rejects(() => db.query("SELECT * FROM public.compromissos"), /permission denied/));
+  await comoPapel(db, "authenticated", () => assert.rejects(() => db.query("SELECT public.desmarcar_compromisso(gen_random_uuid())"), /permission denied/));
+  const id = (await sr("SELECT public.criar_compromisso('dentista', now() + interval '1 day', now() + interval '22 hours', 'aviso') AS id")).rows[0].id;
+  const c = (await db.query("SELECT * FROM public.compromissos WHERE id=$1", [id])).rows[0];
+  assert.ok(c.aviso_lembrete_id, "aviso criado");
+  assert.equal(await n(db, "SELECT texto FROM public.lembretes WHERE id=$1", [c.aviso_lembrete_id]), "aviso");
+  // sem aviso
+  const id2 = (await sr("SELECT public.criar_compromisso('jantar', now() + interval '2 days', NULL, '') AS id")).rows[0].id;
+  assert.equal(await n(db, "SELECT aviso_lembrete_id FROM public.compromissos WHERE id=$1", [id2]), null);
+  // aviso depois do inicio e recusado, sem deixar nada pela metade
+  await assert.rejects(() => sr("SELECT public.criar_compromisso('x', now() + interval '1 hour', now() + interval '2 hours', 'a')"), /antes do compromisso/);
+  assert.equal(await n(db, "SELECT count(*)::int FROM public.compromissos"), 2);
+  assert.equal(await n(db, "SELECT count(*)::int FROM public.lembretes"), 1);
+  // desmarcar
+  assert.equal((await sr("SELECT public.desmarcar_compromisso($1) AS ok", [id])).rows[0].ok, true);
+  assert.equal((await sr("SELECT public.desmarcar_compromisso($1) AS ok", [id])).rows[0].ok, false, "segunda vez: já desmarcado");
+  assert.ok(await n(db, "SELECT cancelado_em FROM public.lembretes WHERE id=$1", [c.aviso_lembrete_id]), "aviso cancelado");
+  // aviso ja enviado nao e alterado
+  const id3 = (await sr("SELECT public.criar_compromisso('call', now() + interval '1 hour', now() - interval '1 min', 'a') AS id")).rows[0].id;
+  await sr("SELECT * FROM public.reivindicar_lembretes(10)");
+  await sr("SELECT public.desmarcar_compromisso($1)", [id3]);
+  assert.equal(await n(db, "SELECT count(*)::int FROM public.lembretes WHERE enviado_em IS NOT NULL AND cancelado_em IS NULL"), 1);
 });

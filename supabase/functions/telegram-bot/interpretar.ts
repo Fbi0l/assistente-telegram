@@ -13,11 +13,17 @@ export type Comando =
   | { tipo: "notas" }
   | { tipo: "buscar"; termo: string }
   | { tipo: "apagar"; numero: number }
+  | { tipo: "agendar"; inicio: Date; titulo: string; avisoMin: number | null }
+  | { tipo: "agenda"; de: Date; ate: Date; rotulo: string }
+  | { tipo: "compromissos" }
+  | { tipo: "desmarcar"; numero: number }
   | { tipo: "erro"; mensagem: string }
   | { tipo: "desconhecido" };
 
 export const LIMITE_LEMBRETE = 500;
 export const LIMITE_NOTA = 4000;
+export const LIMITE_TITULO = 300;
+export const AVISO_PADRAO_MIN = 120; // compromissos: aviso 2h antes, salvo outra escolha
 const MAX_FUTURO_MS = 2 * 366 * 24 * 3600 * 1000;
 
 export const normalizar = (s: string) =>
@@ -37,6 +43,15 @@ export function deLocal(ano: number, mes: number, dia: number, hora: number, min
 const DIAS_SEMANA = ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"];
 const ABREV_SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
 const EXIBIR_SEMANA = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+
+const p2 = (n: number) => String(n).padStart(2, "0");
+export const formatarHora = (d: Date) => { const l = paraLocal(d); return `${p2(l.hora)}:${p2(l.min)}`; };
+export const formatarDia = (d: Date) => { const l = paraLocal(d); return `${EXIBIR_SEMANA[l.semana]} ${p2(l.dia)}/${p2(l.mes + 1)}`; };
+export function formatarDuracao(min: number): string {
+  if (min % 1440 === 0) return min === 1440 ? "1 dia" : `${min / 1440} dias`;
+  if (min >= 60) return min % 60 ? `${Math.floor(min / 60)}h${p2(min % 60)}` : `${min / 60}h`;
+  return `${min} min`;
+}
 
 export function formatarQuando(d: Date): string {
   const l = paraLocal(d);
@@ -80,7 +95,7 @@ const UNIDADES: Record<string, number> = {
 };
 
 // Le a expressao de tempo no inicio dos tokens. Retorna o instante e quantos tokens usou.
-export function lerQuando(tokens: string[], agora: Date): { quando: Date; usados: number } | { erro: string } | null {
+export function lerQuando(tokens: string[], agora: Date): { quando: Date; usados: number; temHora: boolean } | { erro: string } | null {
   let i = 0;
   // "em 10 min", "daqui a 2 horas", "em 10min"
   if (tokens[0] === "em" || (tokens[0] === "daqui" && tokens[1] === "a")) {
@@ -94,7 +109,7 @@ export function lerQuando(tokens: string[], agora: Date): { quando: Date; usados
     else return null;
     const fator = unidade ? UNIDADES[unidade] : undefined;
     if (!fator || n <= 0) return null;
-    return { quando: new Date(agora.getTime() + n * fator * 60000), usados: i + usados };
+    return { quando: new Date(agora.getTime() + n * fator * 60000), usados: i + usados, temHora: true };
   }
 
   const hoje = paraLocal(agora);
@@ -120,6 +135,7 @@ export function lerQuando(tokens: string[], agora: Date): { quando: Date; usados
   if (h) { hora = { h: h.h, m: h.m }; i += h.usados; }
 
   if (!dia && semanaAlvo === null && !hora) return null;
+  const temHora = hora !== null;
   if (!hora) hora = { h: 9, m: 0 }; // so o dia: 9h da manha
 
   let quando: Date;
@@ -135,7 +151,45 @@ export function lerQuando(tokens: string[], agora: Date): { quando: Date; usados
     if (quando <= agora) quando = deLocal(hoje.ano, hoje.mes, hoje.dia + 1, hora.h, hora.m);
   }
   if (quando <= agora) return { erro: `Esse horário já passou (${formatarQuando(quando)}).` };
-  return { quando, usados: i };
+  return { quando, usados: i, temHora };
+}
+
+// Intervalo de dias para consultar a agenda: hoje, amanha, semana, dia da semana ou dd/mm[/aaaa].
+export function lerDia(tokens: string[], agora: Date): { de: Date; ate: Date; rotulo: string } | { erro: string } | null {
+  const h = paraLocal(agora);
+  const dia = (desloc: number) => deLocal(h.ano, h.mes, h.dia + desloc, 0, 0);
+  const t = tokens[0];
+  if (t === undefined || t === "hoje") return { de: dia(0), ate: dia(1), rotulo: "Hoje" };
+  if (t === "amanha") return { de: dia(1), ate: dia(2), rotulo: "Amanhã" };
+  if (t === "semana" || (t === "da" && tokens[1] === "semana")) return { de: dia(0), ate: dia(7), rotulo: "Próximos 7 dias" };
+  const s = diaDaSemana(t);
+  if (s >= 0) { const d = (s - h.semana + 7) % 7; return { de: dia(d), ate: dia(d + 1), rotulo: formatarDia(dia(d)) }; }
+  if (/^\d{1,2}\/\d{1,2}(\/\d{2,4})?$/.test(t)) {
+    const [d, m, a] = t.split("/").map(Number);
+    let ano = a === undefined ? h.ano : a < 100 ? 2000 + a : a;
+    if (m < 1 || m > 12 || new Date(Date.UTC(ano, m - 1, d)).getUTCMonth() !== m - 1) return { erro: "Data inválida." };
+    if (a === undefined && deLocal(ano, m - 1, d + 1, 0, 0) <= agora) ano++;
+    const de = deLocal(ano, m - 1, d, 0, 0);
+    return { de, ate: deLocal(ano, m - 1, d + 1, 0, 0), rotulo: formatarDia(de) };
+  }
+  return null;
+}
+
+// Fim do titulo: "avisar 30 min antes", "avisar 1h antes", "avisar 1 dia antes" ou "sem aviso".
+function lerAviso(tokens: string[]): { avisoMin: number | null; usados: number } | { erro: string } | null {
+  const n = tokens.length;
+  if (n >= 2 && tokens[n - 2] === "sem" && tokens[n - 1] === "aviso") return { avisoMin: null, usados: 2 };
+  if (n < 3 || tokens[n - 1] !== "antes") return null;
+  let qtd: number, unidade: string | undefined, usados: number;
+  const junto = tokens[n - 2].match(/^(\d+)([a-z]+)$/);
+  if (junto && ["avisar", "aviso"].includes(tokens[n - 3])) { qtd = Number(junto[1]); unidade = junto[2]; usados = 3; }
+  else if (n >= 4 && ["avisar", "aviso"].includes(tokens[n - 4]) && /^\d+$/.test(tokens[n - 3])) { qtd = Number(tokens[n - 3]); unidade = tokens[n - 2]; usados = 4; }
+  else return null;
+  const fator = unidade ? UNIDADES[unidade] : undefined;
+  if (!fator || qtd <= 0) return { erro: "Não entendi o aviso. Ex.: avisar 30 min antes, avisar 1h antes, sem aviso" };
+  const min = qtd * fator;
+  if (min > 7 * 1440) return { erro: "O aviso pode ser de até 7 dias antes." };
+  return { avisoMin: min, usados };
 }
 
 const AJUDA_QUANDO =
@@ -174,6 +228,37 @@ export function interpretar(mensagem: string, agora: Date): Comando {
     if (!texto) return { tipo: "erro", mensagem: "Use: nota texto da anotação" };
     if (texto.length > LIMITE_NOTA) return { tipo: "erro", mensagem: `A nota pode ter até ${LIMITE_NOTA} caracteres.` };
     return { tipo: "nota", texto };
+  }
+
+  // Agenda
+  if (cmd === "compromissos") return { tipo: "compromissos" };
+  if (cmd === "agenda") {
+    const r = lerDia(tokens.slice(1), agora);
+    if (r === null) return { tipo: "erro", mensagem: "Use: agenda, agenda amanhã, agenda semana, agenda sexta ou agenda 15/11" };
+    if ("erro" in r) return { tipo: "erro", mensagem: r.erro };
+    return { tipo: "agenda", ...r };
+  }
+  if (cmd === "desmarcar") {
+    const n = numero(1);
+    return Number.isInteger(n) && n > 0 ? { tipo: "desmarcar", numero: n } : { tipo: "erro", mensagem: "Use: desmarcar 2 (o número aparece em /agenda ou /compromissos)." };
+  }
+  if (["agendar", "marcar", "compromisso"].includes(cmd)) {
+    const r = lerQuando(tokens.slice(1), agora);
+    const exemplo = "Ex.: agendar sexta 14h reunião com João";
+    if (r === null) return { tipo: "erro", mensagem: `Não entendi quando. ${exemplo}` };
+    if ("erro" in r) return { tipo: "erro", mensagem: r.erro };
+    if (!r.temHora) return { tipo: "erro", mensagem: `Faltou o horário. ${exemplo}` };
+    if (r.quando.getTime() - agora.getTime() > MAX_FUTURO_MS) return { tipo: "erro", mensagem: "Compromissos podem ser marcados até 2 anos à frente." };
+    let pos = 1 + r.usados;
+    if (["de", "para", "pra", "-", ":"].includes(tokens[pos] ?? "")) pos++;
+    let fim = original.length, avisoMin: number | null = AVISO_PADRAO_MIN;
+    const a = lerAviso(tokens.slice(pos));
+    if (a && "erro" in a) return { tipo: "erro", mensagem: a.erro };
+    if (a) { avisoMin = a.avisoMin; fim -= a.usados; }
+    const titulo = original.slice(pos, fim).join(" ").trim();
+    if (!titulo) return { tipo: "erro", mensagem: `Faltou dizer qual é o compromisso. ${exemplo}` };
+    if (titulo.length > LIMITE_TITULO) return { tipo: "erro", mensagem: `O compromisso pode ter até ${LIMITE_TITULO} caracteres.` };
+    return { tipo: "agendar", inicio: r.quando, titulo, avisoMin };
   }
 
   // Lembretes: "/lembrar ...", "lembrar ...", "me lembra ...", "me lembre de ..."

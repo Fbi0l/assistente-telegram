@@ -19,6 +19,7 @@ const falhou = (o: string, e: { message: string } | null) => {
 };
 const lembrete = (r: { id: string; texto: string; quando: string }) => ({ id: r.id, texto: r.texto, quando: new Date(r.quando) });
 const nota = (r: { id: string; texto: string; criado_em: string }) => ({ id: r.id, texto: r.texto, criado_em: new Date(r.criado_em) });
+const compromisso = (r: { id: string; titulo: string; inicio: string }) => ({ id: r.id, titulo: r.titulo, inicio: new Date(r.inicio) });
 
 const banco: Banco = {
   async criarLembrete(quando, texto) {
@@ -67,6 +68,29 @@ const banco: Banco = {
   async liberarLembrete(id) {
     const { error } = await db.rpc("liberar_lembrete", { p_id: id });
     falhou("liberar lembrete", error);
+  },
+  async criarCompromisso(inicio, titulo, avisoEm, textoAviso) {
+    const { error } = await db.rpc("criar_compromisso", {
+      p_titulo: titulo, p_inicio: inicio.toISOString(), p_aviso_em: avisoEm ? avisoEm.toISOString() : null, p_texto_aviso: textoAviso,
+    });
+    falhou("criar compromisso", error);
+  },
+  async compromissosEntre(de, ate) {
+    const { data, error } = await db.from("compromissos").select("id,titulo,inicio").is("cancelado_em", null)
+      .gte("inicio", de.toISOString()).lt("inicio", ate.toISOString()).order("inicio").order("id").limit(100);
+    falhou("listar agenda", error);
+    return (data ?? []).map(compromisso);
+  },
+  async proximosCompromissos(desde, limite) {
+    const { data, error } = await db.from("compromissos").select("id,titulo,inicio").is("cancelado_em", null)
+      .gte("inicio", desde.toISOString()).order("inicio").order("id").limit(limite);
+    falhou("listar compromissos", error);
+    return (data ?? []).map(compromisso);
+  },
+  async desmarcarCompromisso(id) {
+    const { data, error } = await db.rpc("desmarcar_compromisso", { p_id: id });
+    falhou("desmarcar compromisso", error);
+    return data === true;
   },
 };
 

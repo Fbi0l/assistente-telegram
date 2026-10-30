@@ -23,6 +23,18 @@ function bancoFalso() {
       v.forEach((l) => { l.enviado = true; l.tentativas++; }); return v;
     },
     async liberarLembrete(id) { const l = lembretes.find((x) => x.id === id); if (l) l.enviado = false; },
+    compromissos: [],
+    async criarCompromisso(inicio, titulo, avisoEm, textoAviso) {
+      let aviso = null;
+      if (avisoEm) { await this.criarLembrete(avisoEm, textoAviso); aviso = lembretes.at(-1).id; }
+      this.compromissos.push({ id: `c${++seq}`, inicio, titulo, aviso, cancelado: false });
+    },
+    async compromissosEntre(de, ate) { return this.compromissos.filter((c) => !c.cancelado && c.inicio >= de && c.inicio < ate).sort((a, b) => a.inicio - b.inicio); },
+    async proximosCompromissos(desde, n) { return this.compromissos.filter((c) => !c.cancelado && c.inicio >= desde).sort((a, b) => a.inicio - b.inicio).slice(0, n); },
+    async desmarcarCompromisso(id) {
+      const c = this.compromissos.find((x) => x.id === id && !x.cancelado); if (!c) return false;
+      c.cancelado = true; const l = lembretes.find((x) => x.id === c.aviso && !x.enviado); if (l) l.cancelado = true; return true;
+    },
     agora: AGORA,
   };
 }
@@ -65,6 +77,27 @@ test("disparo: envia vencidos, devolve à fila o que falhou, desiste após 5 ten
   await bot.tratar("lembrar em 30 min c");
   b.agora = new Date(AGORA.getTime() + 40 * 60000);
   assert.deepEqual(await bot.disparar(async () => { throw new Error("rede"); }), { enviados: 0, falhas: 1 });
+});
+
+test("agenda: agendar cria aviso 2h antes, consultar agrupa por dia, desmarcar cancela o aviso", async () => {
+  const b = bancoFalso(), bot = criarBot(b, () => AGORA);
+  assert.equal(await bot.tratar("agendar amanhã 10h dentista"), "Agendado: dentista\nsáb 31/10 às 10:00. Aviso 2h antes.");
+  assert.equal(b.lembretes.length, 1);
+  assert.equal(b.lembretes[0].quando.toISOString(), "2026-10-31T11:00:00.000Z", "aviso às 8h de Fortaleza");
+  assert.equal(b.lembretes[0].texto, "daqui a 2h: dentista (sáb 31/10 às 10:00)");
+  assert.match(await bot.tratar("agendar hoje 11h30 ligar avisar 30 min antes"), /Aviso 30 min antes/);
+  // Compromisso em 1h com aviso de 2h: avisa que nao havera aviso
+  assert.equal(await bot.tratar("agendar em 1 hora call"), "Agendado: call\nsex 30/10 às 11:00. Sem aviso: faltam menos de 2h.");
+  assert.match(await bot.tratar("agendar 02/11 15h médico sem aviso"), /Sem aviso\.$/);
+  assert.equal(b.lembretes.length, 2, "só os compromissos com aviso viraram lembrete");
+  assert.equal(await bot.tratar("/agenda"), "Hoje:\nsex 30/10\n1. 11:00 — call\n2. 11:30 — ligar");
+  assert.equal(await bot.tratar("/compromissos"),
+    "Próximos compromissos:\nsex 30/10\n1. 11:00 — call\n2. 11:30 — ligar\n\nsáb 31/10\n3. 10:00 — dentista\n\nseg 02/11\n4. 15:00 — médico");
+  assert.equal(await bot.tratar("agenda domingo"), "dom 01/11: nenhum compromisso.");
+  assert.match(await bot.tratar("desmarcar 3"), /Desmarcado: dentista/);
+  assert.ok(b.lembretes[0].cancelado, "aviso do dentista cancelado junto");
+  assert.match(await bot.tratar("desmarcar 9"), /Não há compromisso nº 9/);
+  assert.match(await bot.tratar("/ajuda"), /AGENDA \(aviso 2h antes\)/);
 });
 
 // ---------- Seguranca das chamadas HTTP ----------

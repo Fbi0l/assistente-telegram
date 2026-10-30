@@ -11,6 +11,11 @@ Bot pessoal para **lembretes** e **anotações**, que só responde ao dono. Roda
 | `lembrar sexta 14h30 reunião` | Próxima sexta (ou hoje, se ainda não passou) |
 | `lembrar 15/11 aniversário da Ana` | Data sem hora = 9h |
 | `/lembretes` · `cancelar 2` | Lista os próximos · cancela o nº 2 |
+| `agendar sexta 14h reunião com João` | Compromisso, com aviso **2h antes** |
+| `agendar amanhã 10h dentista avisar 30 min antes` | Aviso com antecedência escolhida (até 7 dias) |
+| `agendar 20/11 19h jantar sem aviso` | Compromisso sem aviso |
+| `/agenda` · `agenda amanhã` · `agenda semana` · `agenda sexta` · `agenda 15/11` | Consulta por dia |
+| `/compromissos` · `desmarcar 2` | Próximos compromissos · desmarca o nº 2 (e o aviso) |
 | `nota comprar filtro de café` | Salva uma anotação |
 | `/notas` · `buscar café` · `apagar 3` | Lista · procura · apaga a nº 3 |
 | `/ajuda` | Mostra os exemplos |
@@ -26,7 +31,7 @@ Horários sempre no fuso de Fortaleza (UTC-3).
 
 ## Instalação (uma vez)
 
-1. **Banco:** no SQL Editor do projeto, execute `supabase/migrations/0001_inicial.sql`.
+1. **Banco:** no SQL Editor do projeto, execute `supabase/migrations/0001_inicial.sql` e depois `0003_agenda.sql`.
 2. **Segredos da função:** no painel, *Edge Functions → Secrets*, crie `TELEGRAM_BOT_TOKEN` (token do @BotFather) e `TELEGRAM_CHAT_ID` (seu id, do @userinfobot).
 3. **Publicar a função** (PowerShell, na pasta do repositório):
    ```powershell
@@ -47,5 +52,5 @@ Os testes não usam rede nem credenciais. A lógica fica separada em `interpreta
 
 ## Próximos passos
 
-- Agenda (própria ou ligada a uma agenda existente).
+- Sincronizar a agenda com o Google Agenda (conta de serviço com acesso à agenda compartilhada).
 - Entender frases mais livres e mensagens de áudio.

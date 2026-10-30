@@ -83,3 +83,36 @@ test("notas e listas", () => {
   assert.deepEqual(interpretar("/start", AGORA), { tipo: "ajuda" });
   assert.deepEqual(interpretar("bom dia", AGORA), { tipo: "desconhecido" });
 });
+
+test("agenda: agendar com aviso padrão de 2h, aviso escolhido ou sem aviso", () => {
+  const ag = (msg) => { const c = interpretar(msg, AGORA); assert.equal(c.tipo, "agendar", `${msg} -> ${JSON.stringify(c)}`); return { inicio: local(c.inicio), titulo: c.titulo, avisoMin: c.avisoMin }; };
+  assert.deepEqual(ag("agendar sexta 14h reunião com João"), { inicio: "2026-10-30 14:00", titulo: "reunião com João", avisoMin: 120 });
+  assert.deepEqual(ag("Marcar amanhã às 10h Dentista avisar 30 min antes"), { inicio: "2026-10-31 10:00", titulo: "Dentista", avisoMin: 30 });
+  assert.deepEqual(ag("agendar amanhã 10h dentista avisar 1h antes"), { inicio: "2026-10-31 10:00", titulo: "dentista", avisoMin: 60 });
+  assert.deepEqual(ag("agendar 15/11 9h viagem avisar 1 dia antes"), { inicio: "2026-11-15 09:00", titulo: "viagem", avisoMin: 1440 });
+  assert.deepEqual(ag("agendar 20/11 19h jantar sem aviso"), { inicio: "2026-11-20 19:00", titulo: "jantar", avisoMin: null });
+  assert.deepEqual(ag("compromisso em 3 horas ligar para o banco"), { inicio: "2026-10-30 13:00", titulo: "ligar para o banco", avisoMin: 120 });
+  // "antes" no meio do titulo nao e aviso
+  assert.deepEqual(ag("agendar amanhã 8h revisar antes da reunião"), { inicio: "2026-10-31 08:00", titulo: "revisar antes da reunião", avisoMin: 120 });
+  const erro = (msg) => { const c = interpretar(msg, AGORA); assert.equal(c.tipo, "erro", msg); return c.mensagem; };
+  assert.match(erro("agendar amanhã dentista"), /Faltou o horário/);
+  assert.match(erro("agendar dentista"), /Não entendi quando/);
+  assert.match(erro("agendar amanhã 10h"), /Faltou dizer qual/);
+  assert.match(erro("agendar amanhã 10h x avisar 8 dias antes"), /até 7 dias/);
+  assert.match(erro("agendar hoje 8h x"), /já passou/);
+});
+
+test("agenda: consultas e desmarcar", () => {
+  const ag = (msg) => { const c = interpretar(msg, AGORA); assert.equal(c.tipo, "agenda", msg); return [local(c.de), local(c.ate), c.rotulo]; };
+  assert.deepEqual(ag("/agenda"), ["2026-10-30 00:00", "2026-10-31 00:00", "Hoje"]);
+  assert.deepEqual(ag("agenda amanhã"), ["2026-10-31 00:00", "2026-11-01 00:00", "Amanhã"]);
+  assert.deepEqual(ag("agenda da semana"), ["2026-10-30 00:00", "2026-11-06 00:00", "Próximos 7 dias"]);
+  assert.deepEqual(ag("agenda sexta"), ["2026-10-30 00:00", "2026-10-31 00:00", "sex 30/10"]);
+  assert.deepEqual(ag("agenda segunda"), ["2026-11-02 00:00", "2026-11-03 00:00", "seg 02/11"]);
+  assert.deepEqual(ag("agenda 15/11"), ["2026-11-15 00:00", "2026-11-16 00:00", "dom 15/11"]);
+  assert.deepEqual(ag("agenda 01/02"), ["2027-02-01 00:00", "2027-02-02 00:00", "seg 01/02"]);
+  assert.equal(interpretar("agenda xyz", AGORA).tipo, "erro");
+  assert.deepEqual(interpretar("/compromissos", AGORA), { tipo: "compromissos" });
+  assert.deepEqual(interpretar("desmarcar 2", AGORA), { tipo: "desmarcar", numero: 2 });
+  assert.equal(interpretar("desmarcar", AGORA).tipo, "erro");
+});
