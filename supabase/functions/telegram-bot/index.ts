@@ -5,10 +5,13 @@
 //   TELEGRAM_BOT_TOKEN  token dado pelo @BotFather
 //   TELEGRAM_CHAT_ID    seu id numerico do Telegram (o bot so atende esse id)
 //   GOOGLE_SERVICE_ACCOUNT, GOOGLE_CALENDAR_ID  (opcionais) sincronizacao com o Google Agenda
+//   GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_TASKS_REFRESH_TOKEN  (opcionais) Google Tarefas
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
 import type { Banco } from "./bot.ts";
 import { criarHandler } from "./handler.ts";
 import { criarAgendaGoogle } from "./google.ts";
+import { criarTarefasGoogle } from "./tarefas_google.ts";
+import { dataLocal, deDataLocal } from "./interpretar.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const db = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "", {
@@ -24,6 +27,8 @@ const nota = (r: { id: string; texto: string; criado_em: string }) => ({ id: r.i
 const compromisso = (r: { id: string; titulo: string; inicio: string; google_evento_id: string | null; dia_inteiro: boolean }) =>
   ({ id: r.id, titulo: r.titulo, inicio: new Date(r.inicio), googleId: r.google_evento_id, diaInteiro: r.dia_inteiro === true });
 const COLUNAS_COMPROMISSO = "id,titulo,inicio,google_evento_id,dia_inteiro";
+const tarefa = (r: { id: string; texto: string; prazo: string | null; google_tarefa_id: string | null }) =>
+  ({ id: r.id, texto: r.texto, prazo: r.prazo ? deDataLocal(r.prazo) : null, googleId: r.google_tarefa_id });
 
 const banco: Banco = {
   async criarLembrete(quando, texto) {
@@ -105,6 +110,27 @@ const banco: Banco = {
     falhou("desmarcar compromisso", error);
     return data === true;
   },
+  async criarTarefa(texto, prazo) {
+    const { data, error } = await db.from("tarefas").insert({ texto, prazo: prazo ? dataLocal(prazo) : null }).select("id").single();
+    falhou("criar tarefa", error);
+    return String(data?.id);
+  },
+  async definirTarefaGoogle(id, googleId) {
+    const { error } = await db.from("tarefas").update({ google_tarefa_id: googleId }).eq("id", id);
+    falhou("guardar tarefa do Google", error);
+  },
+  async tarefasPendentes(limite) {
+    const { data, error } = await db.from("tarefas").select("id,texto,prazo,google_tarefa_id").is("concluida_em", null)
+      .order("prazo", { ascending: true, nullsFirst: false }).order("criado_em").order("id").limit(limite);
+    falhou("listar tarefas", error);
+    return (data ?? []).map(tarefa);
+  },
+  async concluirTarefa(id) {
+    const { data, error } = await db.from("tarefas").update({ concluida_em: new Date().toISOString() })
+      .eq("id", id).is("concluida_em", null).select("id");
+    falhou("concluir tarefa", error);
+    return (data ?? []).length === 1;
+  },
 };
 
 async function telegram(metodo: string, corpo: Record<string, unknown>): Promise<boolean> {
@@ -138,5 +164,10 @@ Deno.serve(criarHandler({
   google: criarAgendaGoogle({
     credencialJson: Deno.env.get("GOOGLE_SERVICE_ACCOUNT") ?? "",
     calendarioId: Deno.env.get("GOOGLE_CALENDAR_ID") ?? "",
+  }),
+  tarefasGoogle: criarTarefasGoogle({
+    clientId: Deno.env.get("GOOGLE_OAUTH_CLIENT_ID") ?? "",
+    clientSecret: Deno.env.get("GOOGLE_OAUTH_CLIENT_SECRET") ?? "",
+    refreshToken: Deno.env.get("GOOGLE_TASKS_REFRESH_TOKEN") ?? "",
   }),
 }));

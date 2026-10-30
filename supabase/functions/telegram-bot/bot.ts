@@ -2,10 +2,12 @@
 // Nao conhece o Telegram nem o Supabase diretamente (recebe "banco" e "enviar"), para ser testavel.
 import { formatarDia, formatarDiaInteiro, formatarDuracao, formatarHora, formatarQuando, interpretar, normalizar, type Comando } from "./interpretar.ts";
 import { ErroGoogle, type AgendaExterna } from "./google.ts";
+import type { TarefasExternas } from "./tarefas_google.ts";
 
 export type Lembrete = { id: string; texto: string; quando: Date };
 export type Nota = { id: string; texto: string; criado_em: Date };
 export type Compromisso = { id: string; titulo: string; inicio: Date; googleId?: string | null; diaInteiro?: boolean };
+export type Tarefa = { id: string; texto: string; prazo: Date | null; googleId?: string | null };
 
 export interface Banco {
   criarLembrete(quando: Date, texto: string): Promise<void>;
@@ -23,13 +25,18 @@ export interface Banco {
   compromissosEntre(de: Date, ate: Date): Promise<Compromisso[]>; // ordem: inicio crescente
   proximosCompromissos(desde: Date, limite: number): Promise<Compromisso[]>; // inclui os de dia inteiro de hoje
   desmarcarCompromisso(id: string): Promise<boolean>; // tambem cancela o aviso ainda nao enviado
+  // Tarefas: sem horario, com prazo opcional.
+  criarTarefa(texto: string, prazo: Date | null): Promise<string>; // devolve o id
+  definirTarefaGoogle(id: string, googleId: string): Promise<void>;
+  tarefasPendentes(limite: number): Promise<Tarefa[]>; // ordem: prazo (sem prazo por ultimo), depois criacao
+  concluirTarefa(id: string): Promise<boolean>;
 }
 
 export const LISTA_MAX = 20;
 export const LOTE_MAX = 20; // comandos por mensagem (um por linha)
 const TELEGRAM_MAX = 4000;
 // Na mensagem com varias linhas, estes ficam de fora: os numeros da lista mudam a cada um.
-const SO_UM_POR_VEZ = new Set(["cancelar", "apagar", "desmarcar"]);
+const SO_UM_POR_VEZ = new Set(["cancelar", "apagar", "desmarcar", "feito"]);
 const NOTA = /^\/?(nota|anota|anotar|anote):?$/;
 
 export const AJUDA = [
@@ -50,7 +57,12 @@ export const AJUDA = [
   "agendar 12/11 festa (sem hora = dia todo, aviso às 8h)",
   "/agenda — hoje · agenda amanhã · agenda semana",
   "/compromissos — próximos · desmarcar 2",
-  "/google — confere a ligação com o Google Agenda",
+  "/google — confere a ligação com o Google Agenda e Tarefas",
+  "",
+  "TAREFAS",
+  "tarefa comprar tinta",
+  "tarefa sexta pagar boleto (com prazo)",
+  "/tarefas — lista · feito 2 — conclui a nº 2",
   "",
   "ANOTAÇÕES",
   "nota comprar filtro de café",
@@ -91,6 +103,7 @@ export function criarBot(
   agora: () => Date = () => new Date(),
   google: AgendaExterna | null = null,
   log: (...a: unknown[]) => void = console.error,
+  tarefasGoogle: TarefasExternas | null = null,
 ) {
   const motivo = (e: unknown) => (e instanceof ErroGoogle ? e.message : "o Google Agenda não respondeu.");
 
@@ -102,6 +115,14 @@ export function criarBot(
     } catch (e) {
       log("Google Agenda (listar)", e instanceof Error ? e.message : String(e));
       return { itens: [], aviso: `(Não consegui ler o Google Agenda: ${motivo(e)})` };
+    }
+  }
+  async function doGoogleTarefas(): Promise<{ itens: Awaited<ReturnType<TarefasExternas["listar"]>>; aviso: string }> {
+    if (!tarefasGoogle) return { itens: [], aviso: "" };
+    try { return { itens: (await tarefasGoogle.listar()).slice(0, LISTA_MAX), aviso: "" }; }
+    catch (e) {
+      log("Google Tarefas (listar)", e instanceof Error ? e.message : String(e));
+      return { itens: [], aviso: `(Não consegui ler o Google Tarefas: ${motivo(e)})` };
     }
   }
   const rodape = (itens: ItemAgenda[], aviso: string) =>
@@ -239,15 +260,60 @@ export function criarBot(
         }
         return `Desmarcado: ${alvo.titulo} (${alvo.diaInteiro ? formatarDiaInteiro(alvo.inicio) : formatarQuando(alvo.inicio)})${sobreGoogle}`;
       }
+      case "tarefa": {
+        const id = await banco.criarTarefa(c.texto, c.prazo);
+        let sobreGoogle = "";
+        if (tarefasGoogle) {
+          try { await banco.definirTarefaGoogle(id, await tarefasGoogle.criar(c.texto, c.prazo)); sobreGoogle = "\nNo Google Tarefas também."; }
+          catch (e) {
+            log("Google Tarefas (criar)", e instanceof Error ? e.message : String(e));
+            sobreGoogle = `\nFicou só aqui: não consegui pôr no Google Tarefas (${motivo(e)})`;
+          }
+        }
+        return `Tarefa anotada: ${c.texto}${c.prazo ? `\nPrazo: ${formatarDia(c.prazo)}.` : ""}${sobreGoogle}`;
+      }
+      case "tarefas": {
+        const [doBanco, g] = await Promise.all([banco.tarefasPendentes(LISTA_MAX), doGoogleTarefas()]);
+        const linha = (t: { texto: string; prazo: Date | null }) => `${t.texto}${t.prazo ? ` — até ${formatarDia(t.prazo)}` : ""}`;
+        const linhas = doBanco.map((t, i) => `${i + 1}. ${linha(t)}`).concat(g.itens.map((t) => `• ${linha({ texto: t.titulo, prazo: t.prazo })}`));
+        const rodapeT = [g.itens.length ? "• = do Google Tarefas (conclua por lá)" : "", g.aviso].filter(Boolean).map((t) => `\n\n${t}`).join("");
+        if (!linhas.length) return "Nenhuma tarefa pendente. Ex.: tarefa comprar tinta" + rodapeT;
+        return "Tarefas:\n" + linhas.join("\n") + rodapeT;
+      }
+      case "feito": {
+        const p = await banco.tarefasPendentes(LISTA_MAX);
+        const alvo = p[c.numero - 1];
+        if (!alvo) return `Não há tarefa nº ${c.numero}. Veja a lista em /tarefas.`;
+        if (!(await banco.concluirTarefa(alvo.id))) return "Essa tarefa já estava concluída.";
+        let sobreGoogle = "";
+        if (tarefasGoogle && alvo.googleId) {
+          try { await tarefasGoogle.concluir(alvo.googleId); sobreGoogle = "\nConcluída no Google Tarefas também."; }
+          catch (e) {
+            log("Google Tarefas (concluir)", e instanceof Error ? e.message : String(e));
+            sobreGoogle = `\nNão consegui concluir no Google Tarefas (${motivo(e)}) Marque por lá.`;
+          }
+        }
+        return `Feita: ${alvo.texto}${sobreGoogle}`;
+      }
       case "google": {
-        if (!google) return "Google Agenda não configurado. Crie os segredos GOOGLE_SERVICE_ACCOUNT e GOOGLE_CALENDAR_ID na função do Supabase.";
-        try {
+        let agenda: string, tarefas: string;
+        if (!google) agenda = "Google Agenda não configurado. Crie os segredos GOOGLE_SERVICE_ACCOUNT e GOOGLE_CALENDAR_ID na função do Supabase.";
+        else try {
           const n = (await google.listar(momento, new Date(momento.getTime() + 7 * 86400000))).length;
-          return `Google Agenda conectado. ${n === 1 ? "1 evento" : `${n} eventos`} nos próximos 7 dias (sem contar os marcados por mim).`;
+          agenda = `Google Agenda conectado. ${n === 1 ? "1 evento" : `${n} eventos`} nos próximos 7 dias (sem contar os marcados por mim).`;
         } catch (e) {
           log("Google Agenda (teste)", e instanceof Error ? e.message : String(e));
-          return `Não consegui acessar o Google Agenda: ${motivo(e)}`;
+          agenda = `Não consegui acessar o Google Agenda: ${motivo(e)}`;
         }
+        if (!tarefasGoogle) tarefas = "Google Tarefas ainda não ligado (opcional).";
+        else try {
+          const n = (await tarefasGoogle.listar()).length;
+          tarefas = `Google Tarefas conectado. ${n === 1 ? "1 tarefa pendente" : `${n} tarefas pendentes`} criadas por lá.`;
+        } catch (e) {
+          log("Google Tarefas (teste)", e instanceof Error ? e.message : String(e));
+          tarefas = `Não consegui acessar o Google Tarefas: ${motivo(e)}`;
+        }
+        return `${agenda}\n${tarefas}`;
       }
     }
   }

@@ -18,6 +18,8 @@ Bot pessoal para **lembretes**, **agenda** (ligada ao Google Agenda) e **anotaç
 | `/agenda` · `agenda amanhã` · `agenda semana` · `agenda sexta` · `agenda 15/11` | Consulta por dia |
 | `/compromissos` · `desmarcar 2` | Próximos compromissos · desmarca o nº 2 (e o aviso) |
 | `/google` | Confere a ligação com o Google Agenda |
+| `tarefa comprar tinta` · `tarefa sexta pagar boleto` | Tarefa, com prazo opcional |
+| `/tarefas` · `feito 2` | Lista as pendentes · conclui a nº 2 |
 | `nota comprar filtro de café` | Salva uma anotação |
 | `/notas` · `buscar café` · `apagar 3` | Lista · procura · apaga a nº 3 |
 | `/ajuda` | Mostra os exemplos |
@@ -35,6 +37,10 @@ Horários sempre no fuso de Fortaleza (UTC-3).
 
 Configuração: no Google Cloud, crie um projeto, ative a *Google Calendar API* e crie uma conta de serviço com uma chave JSON. No Google Agenda, compartilhe sua agenda com o e-mail da conta de serviço ("Fazer alterações nos eventos"). No Supabase, crie os segredos da função `GOOGLE_SERVICE_ACCOUNT` (conteúdo do .json) e `GOOGLE_CALENDAR_ID` (ID da agenda; na principal, seu Gmail). Execute `0004_google.sql` e mande `/google` para conferir.
 
+## Google Tarefas (opcional)
+
+As tarefas do bot vão para "Minhas tarefas" no Google Tarefas, e `/tarefas` mostra também as pendentes criadas lá (com `•`). Como o Google não deixa compartilhar tarefas com a conta de serviço, aqui o bot usa o seu login: crie um cliente OAuth (tipo *Aplicativo da Web*, com `https://developers.google.com/oauthplayground` como URI de redirecionamento), ative a *Google Tasks API*, publique a tela de consentimento (senão a autorização expira em 7 dias) e gere um *refresh token* no OAuth Playground com o escopo `https://www.googleapis.com/auth/tasks`. Guarde como segredos da função: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` e `GOOGLE_TASKS_REFRESH_TOKEN`. Mande `/google` para conferir.
+
 ## Segurança
 
 - O bot atende **só o seu id** do Telegram, e só em conversa privada. Mensagens de outras pessoas são ignoradas sem resposta.
@@ -44,7 +50,7 @@ Configuração: no Google Cloud, crie um projeto, ative a *Google Calendar API* 
 
 ## Instalação (uma vez)
 
-1. **Banco:** no SQL Editor do projeto, execute `supabase/migrations/0001_inicial.sql`, `0003_agenda.sql`, `0004_google.sql` e `0005_dia_inteiro.sql`.
+1. **Banco:** no SQL Editor do projeto, execute `supabase/migrations/0001_inicial.sql`, `0003_agenda.sql`, `0004_google.sql`, `0005_dia_inteiro.sql` e `0006_tarefas.sql`.
 2. **Segredos da função:** no painel, *Edge Functions → Secrets*, crie `TELEGRAM_BOT_TOKEN` (token do @BotFather) e `TELEGRAM_CHAT_ID` (seu id, do @userinfobot).
 3. **Publicar a função** (PowerShell, na pasta do repositório):
    ```powershell

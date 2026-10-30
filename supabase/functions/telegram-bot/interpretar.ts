@@ -18,6 +18,9 @@ export type Comando =
   | { tipo: "compromissos" }
   | { tipo: "google" }
   | { tipo: "desmarcar"; numero: number }
+  | { tipo: "tarefa"; texto: string; prazo: Date | null }
+  | { tipo: "tarefas" }
+  | { tipo: "feito"; numero: number }
   | { tipo: "erro"; mensagem: string }
   | { tipo: "desconhecido" };
 
@@ -55,6 +58,10 @@ export function formatarDuracao(min: number): string {
 }
 
 export const formatarDiaInteiro = (d: Date) => `${formatarDia(d)} (dia todo)`;
+
+// Data sem hora ("2026-11-12") no fuso de Fortaleza <-> meia-noite local.
+export const dataLocal = (d: Date) => { const l = paraLocal(d); return `${l.ano}-${p2(l.mes + 1)}-${p2(l.dia)}`; };
+export const deDataLocal = (s: string) => { const [a, m, d] = s.split("-").map(Number); return deLocal(a, m - 1, d, 0, 0); };
 
 export function formatarQuando(d: Date): string {
   const l = paraLocal(d);
@@ -231,6 +238,29 @@ export function interpretar(mensagem: string, agora: Date): Comando {
     if (!texto) return { tipo: "erro", mensagem: "Use: nota texto da anotação" };
     if (texto.length > LIMITE_NOTA) return { tipo: "erro", mensagem: `A nota pode ter até ${LIMITE_NOTA} caracteres.` };
     return { tipo: "nota", texto };
+  }
+
+  // Tarefas: "tarefa comprar tinta", "tarefa sexta pagar boleto", "tarefa ate 15/11 entregar relatorio"
+  if (cmd === "tarefas") return { tipo: "tarefas" };
+  if (["feito", "feita", "concluir", "concluido", "concluida"].includes(cmd)) {
+    const n = numero(1);
+    return Number.isInteger(n) && n > 0 ? { tipo: "feito", numero: n } : { tipo: "erro", mensagem: "Use: feito 2 (o número aparece em /tarefas)." };
+  }
+  if (cmd === "tarefa") {
+    let pos = 1, prazo: Date | null = null;
+    if (tokens[pos] === "ate" || tokens[pos] === "para" || tokens[pos] === "pra") pos++;
+    const t = tokens[pos]?.replace(/[:,]$/, "");
+    if (t !== undefined && (["hoje", "amanha"].includes(t) || /^\d{1,2}\/\d{1,2}(\/\d{2,4})?$/.test(t) || diaDaSemana(t) >= 0)) {
+      const r = lerDia([t], agora);
+      if (r && "erro" in r) return { tipo: "erro", mensagem: r.erro };
+      if (r) { prazo = r.de; pos++; }
+    }
+    if (prazo === null) pos = 1; // "para" sem data faz parte do texto
+    if (["-", ":"].includes(tokens[pos] ?? "")) pos++;
+    const texto = resto(pos);
+    if (!texto) return { tipo: "erro", mensagem: "Use: tarefa comprar tinta (ou: tarefa sexta pagar boleto)" };
+    if (texto.length > LIMITE_LEMBRETE) return { tipo: "erro", mensagem: `A tarefa pode ter até ${LIMITE_LEMBRETE} caracteres.` };
+    return { tipo: "tarefa", texto, prazo };
   }
 
   // Agenda

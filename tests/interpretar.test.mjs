@@ -104,6 +104,19 @@ test("agenda: agendar com aviso padrão de 2h, aviso escolhido ou sem aviso", ()
   assert.match(erro("agendar hoje 8h x"), /já passou/);
 });
 
+test("tarefas: prazo opcional no início", () => {
+  const t = (m) => { const c = interpretar(m, AGORA); return c.tipo === "tarefa" ? [c.texto, c.prazo && local(c.prazo)] : c; };
+  assert.deepEqual(t("tarefa comprar tinta"), ["comprar tinta", null]);
+  assert.deepEqual(t("tarefa amanhã levar o carro"), ["levar o carro", "2026-10-31 00:00"]);
+  assert.deepEqual(t("Tarefa: até 15/11 entregar relatório"), ["entregar relatório", "2026-11-15 00:00"]);
+  assert.deepEqual(t("tarefa hoje: ligar"), ["ligar", "2026-10-30 00:00"]);
+  assert.deepEqual(t("tarefa para casa comprar pão"), ["para casa comprar pão", null]);
+  assert.equal(interpretar("tarefa", AGORA).tipo, "erro");
+  assert.equal(interpretar("tarefa 31/02 x", AGORA).tipo, "erro");
+  assert.deepEqual(interpretar("feito 2", AGORA), { tipo: "feito", numero: 2 });
+  assert.deepEqual(interpretar("/tarefas", AGORA), { tipo: "tarefas" });
+});
+
 test("agenda: consultas e desmarcar", () => {
   const ag = (msg) => { const c = interpretar(msg, AGORA); assert.equal(c.tipo, "agenda", msg); return [local(c.de), local(c.ate), c.rotulo]; };
   assert.deepEqual(ag("/agenda"), ["2026-10-30 00:00", "2026-10-31 00:00", "Hoje"]);

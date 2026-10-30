@@ -6,6 +6,7 @@
 // So mensagens privadas do dono (TELEGRAM_CHAT_ID) sao atendidas; as demais sao ignoradas em silencio.
 import { criarBot, type Banco } from "./bot.ts";
 import type { AgendaExterna } from "./google.ts";
+import type { TarefasExternas } from "./tarefas_google.ts";
 
 export type Dependencias = {
   banco: Banco;
@@ -16,6 +17,7 @@ export type Dependencias = {
   telegram: (metodo: string, corpo: Record<string, unknown>) => Promise<boolean>;
   agora?: () => Date;
   google?: AgendaExterna | null; // Google Agenda (opcional)
+  tarefasGoogle?: TarefasExternas | null; // Google Tarefas (opcional)
   log?: (...a: unknown[]) => void;
 };
 
@@ -38,7 +40,7 @@ const json = (corpo: unknown, status = 200) =>
 
 export function criarHandler(dep: Dependencias) {
   const log = dep.log ?? console.error;
-  const bot = criarBot(dep.banco, dep.agora, dep.google ?? null, log);
+  const bot = criarBot(dep.banco, dep.agora, dep.google ?? null, log, dep.tarefasGoogle ?? null);
   const enviarAoDono = (texto: string) => dep.telegram("sendMessage", { chat_id: dep.donoId, text: texto });
 
   return async (req: Request): Promise<Response> => {

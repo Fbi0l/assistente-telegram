@@ -9,7 +9,7 @@ async function banco() {
   await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role BYPASSRLS;
     GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
     CREATE SCHEMA vault; CREATE TABLE vault.decrypted_secrets(name text, decrypted_secret text);`);
-  for (const f of ["0001_inicial.sql", "0003_agenda.sql", "0004_google.sql", "0005_dia_inteiro.sql"]) {
+  for (const f of ["0001_inicial.sql", "0003_agenda.sql", "0004_google.sql", "0005_dia_inteiro.sql", "0006_tarefas.sql"]) {
     const sql = readFileSync(new URL(`../supabase/migrations/${f}`, import.meta.url), "utf8");
     await db.exec(sql);
     await db.exec(sql); // reaplicar nao quebra
@@ -114,4 +114,14 @@ test("dia inteiro: aviso no próprio dia é aceito; depois do dia, recusado", as
   // com horario continua exigindo aviso antes do inicio (parametro novo e opcional)
   await assert.rejects(() => sr("SELECT public.criar_compromisso('y', now() + interval '1 hour', now() + interval '2 hours', 'a')"), /antes do compromisso/);
   await comoPapel(db, "anon", () => assert.rejects(() => db.query("SELECT public.criar_compromisso('z', now(), NULL, '', true)"), /permission denied/));
+});
+
+test("tarefas: só para o service_role; texto obrigatório", async () => {
+  const db = await banco();
+  for (const papel of ["anon", "authenticated"]) await comoPapel(db, papel, () => assert.rejects(() => db.query("SELECT * FROM public.tarefas"), /permission denied/));
+  await comoPapel(db, "service_role", async () => {
+    await db.query("INSERT INTO public.tarefas(texto, prazo) VALUES ('comprar tinta', '2026-11-12')");
+    await assert.rejects(() => db.query("INSERT INTO public.tarefas(texto) VALUES ('  ')"), /check/);
+  });
+  assert.equal(await n(db, "SELECT prazo::text FROM public.tarefas"), "2026-11-12");
 });

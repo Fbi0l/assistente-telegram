@@ -1,7 +1,7 @@
 // Google Agenda por conta de servico: JWT assinado (RS256) -> token OAuth -> API de eventos.
 // Sem bibliotecas: so fetch e WebCrypto. A chave nunca e registrada em log.
 // Segredos da funcao: GOOGLE_SERVICE_ACCOUNT (conteudo do .json) e GOOGLE_CALENDAR_ID.
-import { deLocal, paraLocal } from "./interpretar.ts";
+import { dataLocal, deLocal } from "./interpretar.ts";
 
 export type EventoExterno = { id: string; titulo: string; inicio: Date; diaInteiro: boolean };
 
@@ -21,9 +21,6 @@ const MARCA = "assistenteTelegram"; // propriedade privada que identifica evento
 const FUSO = "America/Fortaleza";
 
 type Credencial = { client_email: string; private_key: string };
-
-// "2026-11-12" no fuso de Fortaleza (eventos de dia inteiro).
-const dataLocal = (d: Date) => { const l = paraLocal(d); return `${l.ano}-${String(l.mes + 1).padStart(2, "0")}-${String(l.dia).padStart(2, "0")}`; };
 
 export function lerCredencial(json: string): Credencial | null {
   try {

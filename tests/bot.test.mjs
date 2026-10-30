@@ -39,6 +39,14 @@ function bancoFalso() {
       const c = this.compromissos.find((x) => x.id === id && !x.cancelado); if (!c) return false;
       c.cancelado = true; const l = lembretes.find((x) => x.id === c.aviso && !x.enviado); if (l) l.cancelado = true; return true;
     },
+    tarefas: [],
+    async criarTarefa(texto, prazo) { const id = `t${++seq}`; this.tarefas.push({ id, texto, prazo, googleId: null, feita: false, ordem: seq }); return id; },
+    async definirTarefaGoogle(id, g) { this.tarefas.find((t) => t.id === id).googleId = g; },
+    async tarefasPendentes(n) {
+      return this.tarefas.filter((t) => !t.feita)
+        .sort((a, b) => (a.prazo ?? Infinity) - (b.prazo ?? Infinity) || a.ordem - b.ordem).slice(0, n);
+    },
+    async concluirTarefa(id) { const t = this.tarefas.find((x) => x.id === id && !x.feita); if (t) t.feita = true; return !!t; },
     agora: AGORA,
   };
 }
@@ -147,7 +155,7 @@ test("Google Agenda fora do ar: o bot continua funcionando e avisa", async () =>
   assert.match(await bot.tratar("agenda amanhã"), /1\. 10:00 — dentista\n\n\(Não consegui ler o Google Agenda: agenda não encontrada/);
   assert.match(await bot.tratar("/google"), /^Não consegui acessar o Google Agenda: agenda não encontrada/);
   g.falhar = new Error("detalhe interno que não deve aparecer");
-  assert.match(await bot.tratar("/google"), /o Google Agenda não respondeu\.$/);
+  assert.match(await bot.tratar("/google"), /o Google Agenda não respondeu\.\nGoogle Tarefas ainda não ligado/);
   // sem Google configurado
   const semGoogle = criarBot(bancoFalso(), () => AGORA);
   assert.match(await semGoogle.tratar("/google"), /não configurado/);
@@ -172,6 +180,40 @@ test("dia inteiro: agendar sem horário, aviso às 8h do dia, evento de dia todo
   // compromisso de dia inteiro de hoje continua na lista ao longo do dia
   const tarde = criarBot(b, () => new Date("2026-12-05T20:00:00Z"), null, () => {});
   assert.match(await tarde.tratar("/compromissos"), /1\. dia todo — Vila Menino Deus/);
+});
+
+function tarefasGoogleFalso() {
+  let seq = 0;
+  const g = {
+    itens: [], falhar: null,
+    async criar(titulo, prazo) { if (g.falhar) throw g.falhar; const id = `gt${++seq}`; g.itens.push({ id, titulo, prazo, doBot: true, feita: false }); return id; },
+    async concluir(id) { if (g.falhar) throw g.falhar; const t = g.itens.find((x) => x.id === id); if (t) t.feita = true; },
+    async listar() { if (g.falhar) throw g.falhar; return g.itens.filter((t) => !t.doBot && !t.feita).map(({ id, titulo, prazo }) => ({ id, titulo, prazo })); },
+  };
+  return g;
+}
+
+test("tarefas: anotar com e sem prazo, listar por prazo, concluir; espelho no Google Tarefas", async () => {
+  const b = bancoFalso(), gt = tarefasGoogleFalso(), bot = criarBot(b, () => AGORA, null, () => {}, gt);
+  gt.itens.push({ id: "x", titulo: "Renovar CNH", prazo: null, doBot: false, feita: false });
+  assert.equal(await bot.tratar("tarefa comprar tinta"), "Tarefa anotada: comprar tinta\nNo Google Tarefas também.");
+  assert.equal(await bot.tratar("tarefa até 15/11 entregar relatório"), "Tarefa anotada: entregar relatório\nPrazo: dom 15/11.\nNo Google Tarefas também.");
+  assert.equal(gt.itens.find((t) => t.titulo === "entregar relatório").prazo.toISOString(), "2026-11-15T03:00:00.000Z");
+  assert.equal(await bot.tratar("/tarefas"),
+    "Tarefas:\n1. entregar relatório — até dom 15/11\n2. comprar tinta\n• Renovar CNH\n\n• = do Google Tarefas (conclua por lá)");
+  assert.equal(await bot.tratar("feito 2"), "Feita: comprar tinta\nConcluída no Google Tarefas também.");
+  assert.ok(gt.itens.find((t) => t.titulo === "comprar tinta").feita);
+  assert.match(await bot.tratar("feito 5"), /Não há tarefa nº 5/);
+  assert.match(await bot.tratar("/google"), /Google Tarefas conectado\. 1 tarefa pendente/);
+  // Google fora do ar: a tarefa fica salva no bot
+  gt.falhar = new ErroGoogle("a autorização do Google Tarefas expirou ou foi revogada.");
+  assert.match(await bot.tratar("tarefa ligar pro banco"), /Ficou só aqui: não consegui pôr no Google Tarefas \(a autorização/);
+  assert.match(await bot.tratar("/tarefas"), /2\. ligar pro banco\n\n\(Não consegui ler o Google Tarefas/);
+  // sem Google Tarefas
+  const so = criarBot(bancoFalso(), () => AGORA);
+  assert.equal(await so.tratar("tarefa sexta pagar boleto"), "Tarefa anotada: pagar boleto\nPrazo: sex 30/10.");
+  assert.equal(await so.tratar("/tarefas"), "Tarefas:\n1. pagar boleto — até sex 30/10");
+  assert.match(await so.tratar("tarefa x\nfeito 1"), /"feito 1": mande este sozinho/);
 });
 
 test("vários comandos numa mensagem, um por linha", async () => {
