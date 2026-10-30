@@ -21,7 +21,7 @@ export const LIMITE_NOTA = 4000;
 const MAX_FUTURO_MS = 2 * 366 * 24 * 3600 * 1000;
 
 export const normalizar = (s: string) =>
-  s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
 
 // Data/hora "de parede" em Fortaleza <-> instante real.
 type Local = { ano: number; mes: number; dia: number; hora: number; min: number; semana: number };
