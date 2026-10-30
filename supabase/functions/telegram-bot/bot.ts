@@ -1,11 +1,11 @@
 // Logica do assistente: transforma comandos em acoes e respostas.
 // Nao conhece o Telegram nem o Supabase diretamente (recebe "banco" e "enviar"), para ser testavel.
-import { formatarDia, formatarDuracao, formatarHora, formatarQuando, interpretar, normalizar, type Comando } from "./interpretar.ts";
+import { formatarDia, formatarDiaInteiro, formatarDuracao, formatarHora, formatarQuando, interpretar, normalizar, type Comando } from "./interpretar.ts";
 import { ErroGoogle, type AgendaExterna } from "./google.ts";
 
 export type Lembrete = { id: string; texto: string; quando: Date };
 export type Nota = { id: string; texto: string; criado_em: Date };
-export type Compromisso = { id: string; titulo: string; inicio: Date; googleId?: string | null };
+export type Compromisso = { id: string; titulo: string; inicio: Date; googleId?: string | null; diaInteiro?: boolean };
 
 export interface Banco {
   criarLembrete(quando: Date, texto: string): Promise<void>;
@@ -18,10 +18,10 @@ export interface Banco {
   reivindicarLembretes(limite: number): Promise<Lembrete[]>; // marca como enviados (atomico)
   liberarLembrete(id: string): Promise<void>; // envio falhou: tenta de novo no proximo minuto
   // Agenda: o aviso do compromisso e um lembrete criado na mesma transacao.
-  criarCompromisso(inicio: Date, titulo: string, avisoEm: Date | null, textoAviso: string): Promise<string>; // devolve o id
+  criarCompromisso(inicio: Date, titulo: string, avisoEm: Date | null, textoAviso: string, diaInteiro: boolean): Promise<string>; // devolve o id
   definirEventoGoogle(id: string, eventoId: string): Promise<void>;
   compromissosEntre(de: Date, ate: Date): Promise<Compromisso[]>; // ordem: inicio crescente
-  proximosCompromissos(desde: Date, limite: number): Promise<Compromisso[]>;
+  proximosCompromissos(desde: Date, limite: number): Promise<Compromisso[]>; // inclui os de dia inteiro de hoje
   desmarcarCompromisso(id: string): Promise<boolean>; // tambem cancela o aviso ainda nao enviado
 }
 
@@ -47,6 +47,7 @@ export const AJUDA = [
   "agendar sexta 14h reunião com João",
   "agendar amanhã 10h dentista avisar 30 min antes",
   "agendar 20/11 19h jantar sem aviso",
+  "agendar 12/11 festa (sem hora = dia todo, aviso às 8h)",
   "/agenda — hoje · agenda amanhã · agenda semana",
   "/compromissos — próximos · desmarcar 2",
   "/google — confere a ligação com o Google Agenda",
@@ -66,6 +67,8 @@ const numerada = (itens: string[]) => itens.map((t, i) => `${i + 1}. ${t}`).join
 // Itens do Google Agenda (criados direto la) aparecem com "•" e nao podem ser desmarcados pelo bot.
 type ItemAgenda = { id: string; titulo: string; inicio: Date; diaInteiro?: boolean };
 const DURACAO_PADRAO_MIN = 60;
+const AVISO_DIA_INTEIRO_MIN = 8 * 60; // compromisso de dia inteiro: aviso as 8h
+const paraDia = (d: Date) => formatarDia(d);
 const JANELA_GOOGLE_DIAS = 30;
 const NOTA_GOOGLE = "• = do Google Agenda (altere por lá)";
 
@@ -172,18 +175,27 @@ export function criarBot(
         return (await banco.apagarNota(alvo.id)) ? `Apagada: ${alvo.texto}` : "Essa nota já tinha sido apagada.";
       }
       case "agendar": {
+        // Dia inteiro: o aviso conta a partir das 8h do dia (padrao: no proprio dia, as 8h).
+        const base = c.diaInteiro ? c.inicio.getTime() + AVISO_DIA_INTEIRO_MIN * 60000 : c.inicio.getTime();
+        const quandoTexto = c.diaInteiro ? formatarDiaInteiro(c.inicio) : formatarQuando(c.inicio);
         let avisoEm: Date | null = null, sobreAviso = "Sem aviso.";
         if (c.avisoMin !== null) {
-          const quando = new Date(c.inicio.getTime() - c.avisoMin * 60000);
-          if (quando > momento) { avisoEm = quando; sobreAviso = `Aviso ${formatarDuracao(c.avisoMin)} antes.`; }
-          else sobreAviso = `Sem aviso: faltam menos de ${formatarDuracao(c.avisoMin)}.`;
+          const quando = new Date(base - c.avisoMin * 60000);
+          if (quando > momento) {
+            avisoEm = quando;
+            sobreAviso = c.diaInteiro ? `Aviso ${formatarQuando(quando)}.` : `Aviso ${formatarDuracao(c.avisoMin)} antes.`;
+          } else sobreAviso = c.diaInteiro ? "Sem aviso: o horário do aviso já passou." : `Sem aviso: faltam menos de ${formatarDuracao(c.avisoMin)}.`;
         }
-        const textoAviso = `daqui a ${c.avisoMin === null ? "" : formatarDuracao(c.avisoMin)}: ${c.titulo} (${formatarQuando(c.inicio)})`;
-        const id = await banco.criarCompromisso(c.inicio, c.titulo, avisoEm, textoAviso);
+        const textoAviso = c.diaInteiro
+          ? `${avisoEm && paraDia(avisoEm) === paraDia(c.inicio) ? "hoje" : formatarDia(c.inicio)}: ${c.titulo} (dia todo)`
+          : `daqui a ${c.avisoMin === null ? "" : formatarDuracao(c.avisoMin)}: ${c.titulo} (${formatarQuando(c.inicio)})`;
+        const id = await banco.criarCompromisso(c.inicio, c.titulo, avisoEm, textoAviso, c.diaInteiro);
         let sobreGoogle = "";
         if (google) {
           try {
-            const evento = await google.criar(c.titulo, c.inicio, new Date(c.inicio.getTime() + DURACAO_PADRAO_MIN * 60000));
+            const evento = c.diaInteiro
+              ? await google.criar(c.titulo, c.inicio, new Date(c.inicio.getTime() + 86400000), true)
+              : await google.criar(c.titulo, c.inicio, new Date(c.inicio.getTime() + DURACAO_PADRAO_MIN * 60000));
             await banco.definirEventoGoogle(id, evento);
             sobreGoogle = "\nNo Google Agenda também.";
           } catch (e) {
@@ -191,7 +203,7 @@ export function criarBot(
             sobreGoogle = `\nFicou só aqui: não consegui pôr no Google Agenda (${motivo(e)})`;
           }
         }
-        return `Agendado: ${c.titulo}\n${formatarQuando(c.inicio)}. ${sobreAviso}${sobreGoogle}`;
+        return `Agendado: ${c.titulo}\n${quandoTexto}. ${sobreAviso}${sobreGoogle}`;
       }
       case "compromissos": {
         const [p, g] = await Promise.all([
@@ -225,7 +237,7 @@ export function criarBot(
             sobreGoogle = `\nNão consegui tirar do Google Agenda (${motivo(e)}) Apague por lá.`;
           }
         }
-        return `Desmarcado: ${alvo.titulo} (${formatarQuando(alvo.inicio)})${sobreGoogle}`;
+        return `Desmarcado: ${alvo.titulo} (${alvo.diaInteiro ? formatarDiaInteiro(alvo.inicio) : formatarQuando(alvo.inicio)})${sobreGoogle}`;
       }
       case "google": {
         if (!google) return "Google Agenda não configurado. Crie os segredos GOOGLE_SERVICE_ACCOUNT e GOOGLE_CALENDAR_ID na função do Supabase.";

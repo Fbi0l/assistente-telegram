@@ -25,16 +25,16 @@ function bancoFalso() {
     },
     async liberarLembrete(id) { const l = lembretes.find((x) => x.id === id); if (l) l.enviado = false; },
     compromissos: [],
-    async criarCompromisso(inicio, titulo, avisoEm, textoAviso) {
+    async criarCompromisso(inicio, titulo, avisoEm, textoAviso, diaInteiro = false) {
       let aviso = null;
       if (avisoEm) { await this.criarLembrete(avisoEm, textoAviso); aviso = lembretes.at(-1).id; }
       const id = `c${++seq}`;
-      this.compromissos.push({ id, inicio, titulo, aviso, cancelado: false, googleId: null });
+      this.compromissos.push({ id, inicio, titulo, aviso, cancelado: false, googleId: null, diaInteiro });
       return id;
     },
     async definirEventoGoogle(id, eventoId) { this.compromissos.find((c) => c.id === id).googleId = eventoId; },
     async compromissosEntre(de, ate) { return this.compromissos.filter((c) => !c.cancelado && c.inicio >= de && c.inicio < ate).sort((a, b) => a.inicio - b.inicio); },
-    async proximosCompromissos(desde, n) { return this.compromissos.filter((c) => !c.cancelado && c.inicio >= desde).sort((a, b) => a.inicio - b.inicio).slice(0, n); },
+    async proximosCompromissos(desde, n) { return this.compromissos.filter((c) => !c.cancelado && (c.inicio >= desde || (c.diaInteiro && c.inicio > desde - 86400000))).sort((a, b) => a.inicio - b.inicio).slice(0, n); },
     async desmarcarCompromisso(id) {
       const c = this.compromissos.find((x) => x.id === id && !x.cancelado); if (!c) return false;
       c.cancelado = true; const l = lembretes.find((x) => x.id === c.aviso && !x.enviado); if (l) l.cancelado = true; return true;
@@ -109,7 +109,7 @@ function googleFalso() {
   let seq = 0;
   const g = {
     eventos: [], falhar: null,
-    async criar(titulo, inicio, fim) { if (g.falhar) throw g.falhar; const id = `ev${++seq}`; g.eventos.push({ id, titulo, inicio, fim, doBot: true }); return id; },
+    async criar(titulo, inicio, fim, diaInteiro = false) { if (g.falhar) throw g.falhar; const id = `ev${++seq}`; g.eventos.push({ id, titulo, inicio, fim, doBot: true, diaInteiro }); return id; },
     async apagar(id) { if (g.falhar) throw g.falhar; g.eventos = g.eventos.filter((e) => e.id !== id); },
     async listar(de, ate) {
       if (g.falhar) throw g.falhar;
@@ -152,6 +152,26 @@ test("Google Agenda fora do ar: o bot continua funcionando e avisa", async () =>
   const semGoogle = criarBot(bancoFalso(), () => AGORA);
   assert.match(await semGoogle.tratar("/google"), /não configurado/);
   assert.equal(await semGoogle.tratar("agendar amanhã 10h dentista"), "Agendado: dentista\nsáb 31/10 às 10:00. Aviso 2h antes.");
+});
+
+test("dia inteiro: agendar sem horário, aviso às 8h do dia, evento de dia todo no Google", async () => {
+  const b = bancoFalso(), g = googleFalso(), bot = criarBot(b, () => AGORA, g, () => {});
+  assert.equal(await bot.tratar("agendar 12/11 Shamah: N. Sra. de Nazaré"),
+    "Agendado: Shamah: N. Sra. de Nazaré\nqui 12/11 (dia todo). Aviso qui 12/11 às 08:00.\nNo Google Agenda também.");
+  const c = b.compromissos[0];
+  assert.ok(c.diaInteiro);
+  assert.equal(c.inicio.toISOString(), "2026-11-12T03:00:00.000Z", "meia-noite em Fortaleza");
+  assert.equal(b.lembretes[0].quando.toISOString(), "2026-11-12T11:00:00.000Z", "aviso às 8h de Fortaleza");
+  assert.equal(b.lembretes[0].texto, "hoje: Shamah: N. Sra. de Nazaré (dia todo)");
+  const ev = g.eventos[0];
+  assert.ok(ev.diaInteiro); assert.equal(ev.fim - ev.inicio, 86400000);
+  assert.match(await bot.tratar("agendar 05/12 Vila Menino Deus avisar 1 dia antes"), /Aviso sex 04\/12 às 08:00\./);
+  assert.equal(b.lembretes[1].texto, "sáb 05/12: Vila Menino Deus (dia todo)");
+  assert.match(await bot.tratar("agenda 12/11"), /qui 12\/11\n1\. dia todo — Shamah: N\. Sra\. de Nazaré/);
+  assert.match(await bot.tratar("desmarcar 1"), /^Desmarcado: Shamah: N\. Sra\. de Nazaré \(qui 12\/11 \(dia todo\)\)/);
+  // compromisso de dia inteiro de hoje continua na lista ao longo do dia
+  const tarde = criarBot(b, () => new Date("2026-12-05T20:00:00Z"), null, () => {});
+  assert.match(await tarde.tratar("/compromissos"), /1\. dia todo — Vila Menino Deus/);
 });
 
 test("vários comandos numa mensagem, um por linha", async () => {

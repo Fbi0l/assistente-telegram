@@ -14,6 +14,7 @@ Bot pessoal para **lembretes**, **agenda** (ligada ao Google Agenda) e **anotaç
 | `agendar sexta 14h reunião com João` | Compromisso, com aviso **2h antes** |
 | `agendar amanhã 10h dentista avisar 30 min antes` | Aviso com antecedência escolhida (até 7 dias) |
 | `agendar 20/11 19h jantar sem aviso` | Compromisso sem aviso |
+| `agendar 12/11 festa` | Sem horário: dia todo, aviso no dia às 8h (ou `avisar 1 dia antes`) |
 | `/agenda` · `agenda amanhã` · `agenda semana` · `agenda sexta` · `agenda 15/11` | Consulta por dia |
 | `/compromissos` · `desmarcar 2` | Próximos compromissos · desmarca o nº 2 (e o aviso) |
 | `/google` | Confere a ligação com o Google Agenda |
@@ -43,7 +44,7 @@ Configuração: no Google Cloud, crie um projeto, ative a *Google Calendar API* 
 
 ## Instalação (uma vez)
 
-1. **Banco:** no SQL Editor do projeto, execute `supabase/migrations/0001_inicial.sql`, `0003_agenda.sql` e `0004_google.sql`.
+1. **Banco:** no SQL Editor do projeto, execute `supabase/migrations/0001_inicial.sql`, `0003_agenda.sql`, `0004_google.sql` e `0005_dia_inteiro.sql`.
 2. **Segredos da função:** no painel, *Edge Functions → Secrets*, crie `TELEGRAM_BOT_TOKEN` (token do @BotFather) e `TELEGRAM_CHAT_ID` (seu id, do @userinfobot).
 3. **Publicar a função** (PowerShell, na pasta do repositório):
    ```powershell

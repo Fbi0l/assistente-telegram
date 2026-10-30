@@ -95,7 +95,9 @@ test("agenda: agendar com aviso padrão de 2h, aviso escolhido ou sem aviso", ()
   // "antes" no meio do titulo nao e aviso
   assert.deepEqual(ag("agendar amanhã 8h revisar antes da reunião"), { inicio: "2026-10-31 08:00", titulo: "revisar antes da reunião", avisoMin: 120 });
   const erro = (msg) => { const c = interpretar(msg, AGORA); assert.equal(c.tipo, "erro", msg); return c.mensagem; };
-  assert.match(erro("agendar amanhã dentista"), /Faltou o horário/);
+  { const c = interpretar("agendar amanhã dentista", AGORA);
+    assert.deepEqual([c.tipo, c.diaInteiro, local(c.inicio), c.avisoMin, c.titulo], ["agendar", true, "2026-10-31 00:00", 0, "dentista"], "sem hora = dia todo"); }
+  assert.equal(interpretar("agendar sexta 14h x", AGORA).diaInteiro, false);
   assert.match(erro("agendar dentista"), /Não entendi quando/);
   assert.match(erro("agendar amanhã 10h"), /Faltou dizer qual/);
   assert.match(erro("agendar amanhã 10h x avisar 8 dias antes"), /até 7 dias/);

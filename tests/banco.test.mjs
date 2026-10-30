@@ -9,7 +9,7 @@ async function banco() {
   await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role BYPASSRLS;
     GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
     CREATE SCHEMA vault; CREATE TABLE vault.decrypted_secrets(name text, decrypted_secret text);`);
-  for (const f of ["0001_inicial.sql", "0003_agenda.sql", "0004_google.sql"]) {
+  for (const f of ["0001_inicial.sql", "0003_agenda.sql", "0004_google.sql", "0005_dia_inteiro.sql"]) {
     const sql = readFileSync(new URL(`../supabase/migrations/${f}`, import.meta.url), "utf8");
     await db.exec(sql);
     await db.exec(sql); // reaplicar nao quebra
@@ -103,4 +103,15 @@ test("google: id do evento guardado no compromisso", async () => {
   await comoPapel(db, "service_role", () => db.query("UPDATE public.compromissos SET google_evento_id = 'ev123' WHERE id = $1", [id]));
   assert.equal(await n(db, "SELECT google_evento_id FROM public.compromissos WHERE id=$1", [id]), "ev123");
   await assert.rejects(() => db.query("UPDATE public.compromissos SET google_evento_id = $1", ["x".repeat(1025)]), /check/);
+});
+
+test("dia inteiro: aviso no próprio dia é aceito; depois do dia, recusado", async () => {
+  const db = await banco();
+  const sr = (q) => comoPapel(db, "service_role", () => db.query(q));
+  const id = (await sr("SELECT public.criar_compromisso('festa', date_trunc('day', now()) + interval '2 days', date_trunc('day', now()) + interval '2 days 8 hours', 'aviso', true) AS id")).rows[0].id;
+  assert.equal(await n(db, "SELECT dia_inteiro FROM public.compromissos WHERE id=$1", [id]), true);
+  await assert.rejects(() => sr("SELECT public.criar_compromisso('x', date_trunc('day', now()) + interval '2 days', date_trunc('day', now()) + interval '3 days', 'a', true)"), /antes do compromisso/);
+  // com horario continua exigindo aviso antes do inicio (parametro novo e opcional)
+  await assert.rejects(() => sr("SELECT public.criar_compromisso('y', now() + interval '1 hour', now() + interval '2 hours', 'a')"), /antes do compromisso/);
+  await comoPapel(db, "anon", () => assert.rejects(() => db.query("SELECT public.criar_compromisso('z', now(), NULL, '', true)"), /permission denied/));
 });

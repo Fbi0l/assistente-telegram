@@ -21,9 +21,9 @@ const falhou = (o: string, e: { message: string } | null) => {
 };
 const lembrete = (r: { id: string; texto: string; quando: string }) => ({ id: r.id, texto: r.texto, quando: new Date(r.quando) });
 const nota = (r: { id: string; texto: string; criado_em: string }) => ({ id: r.id, texto: r.texto, criado_em: new Date(r.criado_em) });
-const compromisso = (r: { id: string; titulo: string; inicio: string; google_evento_id: string | null }) =>
-  ({ id: r.id, titulo: r.titulo, inicio: new Date(r.inicio), googleId: r.google_evento_id });
-const COLUNAS_COMPROMISSO = "id,titulo,inicio,google_evento_id";
+const compromisso = (r: { id: string; titulo: string; inicio: string; google_evento_id: string | null; dia_inteiro: boolean }) =>
+  ({ id: r.id, titulo: r.titulo, inicio: new Date(r.inicio), googleId: r.google_evento_id, diaInteiro: r.dia_inteiro === true });
+const COLUNAS_COMPROMISSO = "id,titulo,inicio,google_evento_id,dia_inteiro";
 
 const banco: Banco = {
   async criarLembrete(quando, texto) {
@@ -73,9 +73,10 @@ const banco: Banco = {
     const { error } = await db.rpc("liberar_lembrete", { p_id: id });
     falhou("liberar lembrete", error);
   },
-  async criarCompromisso(inicio, titulo, avisoEm, textoAviso) {
+  async criarCompromisso(inicio, titulo, avisoEm, textoAviso, diaInteiro) {
     const { data, error } = await db.rpc("criar_compromisso", {
       p_titulo: titulo, p_inicio: inicio.toISOString(), p_aviso_em: avisoEm ? avisoEm.toISOString() : null, p_texto_aviso: textoAviso,
+      p_dia_inteiro: diaInteiro,
     });
     falhou("criar compromisso", error);
     return String(data);
@@ -91,8 +92,11 @@ const banco: Banco = {
     return (data ?? []).map(compromisso);
   },
   async proximosCompromissos(desde, limite) {
+    // Os de dia inteiro comecam a meia-noite: os de hoje continuam na lista.
+    const ontem = new Date(desde.getTime() - 86400000).toISOString();
     const { data, error } = await db.from("compromissos").select(COLUNAS_COMPROMISSO).is("cancelado_em", null)
-      .gte("inicio", desde.toISOString()).order("inicio").order("id").limit(limite);
+      .or(`inicio.gte.${desde.toISOString()},and(dia_inteiro.is.true,inicio.gt.${ontem})`)
+      .order("inicio").order("id").limit(limite);
     falhou("listar compromissos", error);
     return (data ?? []).map(compromisso);
   },

@@ -13,7 +13,7 @@ export type Comando =
   | { tipo: "notas" }
   | { tipo: "buscar"; termo: string }
   | { tipo: "apagar"; numero: number }
-  | { tipo: "agendar"; inicio: Date; titulo: string; avisoMin: number | null }
+  | { tipo: "agendar"; inicio: Date; titulo: string; avisoMin: number | null; diaInteiro: boolean }
   | { tipo: "agenda"; de: Date; ate: Date; rotulo: string }
   | { tipo: "compromissos" }
   | { tipo: "google" }
@@ -53,6 +53,8 @@ export function formatarDuracao(min: number): string {
   if (min >= 60) return min % 60 ? `${Math.floor(min / 60)}h${p2(min % 60)}` : `${min / 60}h`;
   return `${min} min`;
 }
+
+export const formatarDiaInteiro = (d: Date) => `${formatarDia(d)} (dia todo)`;
 
 export function formatarQuando(d: Date): string {
   const l = paraLocal(d);
@@ -249,18 +251,20 @@ export function interpretar(mensagem: string, agora: Date): Comando {
     const exemplo = "Ex.: agendar sexta 14h reunião com João";
     if (r === null) return { tipo: "erro", mensagem: `Não entendi quando. ${exemplo}` };
     if ("erro" in r) return { tipo: "erro", mensagem: r.erro };
-    if (!r.temHora) return { tipo: "erro", mensagem: `Faltou o horário. ${exemplo}` };
+    // Sem horario: compromisso de dia inteiro (aviso no proprio dia, as 8h).
+    const diaInteiro = !r.temHora;
+    if (diaInteiro) { const l = paraLocal(r.quando); r.quando = deLocal(l.ano, l.mes, l.dia, 0, 0); }
     if (r.quando.getTime() - agora.getTime() > MAX_FUTURO_MS) return { tipo: "erro", mensagem: "Compromissos podem ser marcados até 2 anos à frente." };
     let pos = 1 + r.usados;
     if (["de", "para", "pra", "-", ":"].includes(tokens[pos] ?? "")) pos++;
-    let fim = original.length, avisoMin: number | null = AVISO_PADRAO_MIN;
+    let fim = original.length, avisoMin: number | null = diaInteiro ? 0 : AVISO_PADRAO_MIN;
     const a = lerAviso(tokens.slice(pos));
     if (a && "erro" in a) return { tipo: "erro", mensagem: a.erro };
     if (a) { avisoMin = a.avisoMin; fim -= a.usados; }
     const titulo = original.slice(pos, fim).join(" ").trim();
     if (!titulo) return { tipo: "erro", mensagem: `Faltou dizer qual é o compromisso. ${exemplo}` };
     if (titulo.length > LIMITE_TITULO) return { tipo: "erro", mensagem: `O compromisso pode ter até ${LIMITE_TITULO} caracteres.` };
-    return { tipo: "agendar", inicio: r.quando, titulo, avisoMin };
+    return { tipo: "agendar", inicio: r.quando, titulo, avisoMin, diaInteiro };
   }
 
   // Lembretes: "/lembrar ...", "lembrar ...", "me lembra ...", "me lembre de ..."

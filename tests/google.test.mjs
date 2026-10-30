@@ -72,6 +72,14 @@ test("criar: evento com fuso de Fortaleza e marca do bot, na agenda certa", asyn
   assert.deepEqual(ev.extendedProperties, { private: { assistenteTelegram: "1" } });
 });
 
+test("criar dia inteiro: datas de Fortaleza, fim no dia seguinte", async () => {
+  const { g, chamadas } = montar({ "/events": () => resposta(200, { id: "x" }) });
+  await g.criar("festa", new Date("2026-11-12T03:00:00Z"), new Date("2026-11-13T03:00:00Z"), true);
+  const ev = JSON.parse(chamadas.at(-1).corpo);
+  assert.deepEqual(ev.start, { date: "2026-11-12" });
+  assert.deepEqual(ev.end, { date: "2026-11-13" });
+});
+
 test("listar: horário e dia inteiro, sem cancelados nem os criados pelo bot", async () => {
   const { g, chamadas } = montar({
     "/events?": () => resposta(200, { items: [

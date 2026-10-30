@@ -1,12 +1,12 @@
 // Google Agenda por conta de servico: JWT assinado (RS256) -> token OAuth -> API de eventos.
 // Sem bibliotecas: so fetch e WebCrypto. A chave nunca e registrada em log.
 // Segredos da funcao: GOOGLE_SERVICE_ACCOUNT (conteudo do .json) e GOOGLE_CALENDAR_ID.
-import { deLocal } from "./interpretar.ts";
+import { deLocal, paraLocal } from "./interpretar.ts";
 
 export type EventoExterno = { id: string; titulo: string; inicio: Date; diaInteiro: boolean };
 
 export interface AgendaExterna {
-  criar(titulo: string, inicio: Date, fim: Date): Promise<string>; // devolve o id do evento
+  criar(titulo: string, inicio: Date, fim: Date, diaInteiro?: boolean): Promise<string>; // devolve o id do evento
   apagar(id: string): Promise<void>; // evento ja apagado conta como sucesso
   listar(de: Date, ate: Date): Promise<EventoExterno[]>; // sem os eventos criados pelo proprio bot
 }
@@ -21,6 +21,9 @@ const MARCA = "assistenteTelegram"; // propriedade privada que identifica evento
 const FUSO = "America/Fortaleza";
 
 type Credencial = { client_email: string; private_key: string };
+
+// "2026-11-12" no fuso de Fortaleza (eventos de dia inteiro).
+const dataLocal = (d: Date) => { const l = paraLocal(d); return `${l.ano}-${String(l.mes + 1).padStart(2, "0")}-${String(l.dia).padStart(2, "0")}`; };
 
 export function lerCredencial(json: string): Credencial | null {
   try {
@@ -115,12 +118,12 @@ export function criarAgendaGoogle(op: Opcoes): AgendaExterna | null {
   }
 
   return {
-    async criar(titulo, inicio, fim) {
+    async criar(titulo, inicio, fim, diaInteiro = false) {
       const ev = await chamar("POST", "", {
         summary: titulo,
         description: "Marcado pelo assistente do Telegram.",
-        start: { dateTime: inicio.toISOString(), timeZone: FUSO },
-        end: { dateTime: fim.toISOString(), timeZone: FUSO },
+        start: diaInteiro ? { date: dataLocal(inicio) } : { dateTime: inicio.toISOString(), timeZone: FUSO },
+        end: diaInteiro ? { date: dataLocal(fim) } : { dateTime: fim.toISOString(), timeZone: FUSO },
         extendedProperties: { private: { [MARCA]: "1" } },
       });
       if (typeof ev?.id !== "string") throw new ErroGoogle("o Google não devolveu o evento criado.");
