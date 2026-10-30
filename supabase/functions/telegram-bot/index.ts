@@ -4,9 +4,11 @@
 // Segredos da funcao (painel do Supabase > Edge Functions > Secrets):
 //   TELEGRAM_BOT_TOKEN  token dado pelo @BotFather
 //   TELEGRAM_CHAT_ID    seu id numerico do Telegram (o bot so atende esse id)
+//   GOOGLE_SERVICE_ACCOUNT, GOOGLE_CALENDAR_ID  (opcionais) sincronizacao com o Google Agenda
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.118.0";
 import type { Banco } from "./bot.ts";
 import { criarHandler } from "./handler.ts";
+import { criarAgendaGoogle } from "./google.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const db = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "", {
@@ -19,7 +21,9 @@ const falhou = (o: string, e: { message: string } | null) => {
 };
 const lembrete = (r: { id: string; texto: string; quando: string }) => ({ id: r.id, texto: r.texto, quando: new Date(r.quando) });
 const nota = (r: { id: string; texto: string; criado_em: string }) => ({ id: r.id, texto: r.texto, criado_em: new Date(r.criado_em) });
-const compromisso = (r: { id: string; titulo: string; inicio: string }) => ({ id: r.id, titulo: r.titulo, inicio: new Date(r.inicio) });
+const compromisso = (r: { id: string; titulo: string; inicio: string; google_evento_id: string | null }) =>
+  ({ id: r.id, titulo: r.titulo, inicio: new Date(r.inicio), googleId: r.google_evento_id });
+const COLUNAS_COMPROMISSO = "id,titulo,inicio,google_evento_id";
 
 const banco: Banco = {
   async criarLembrete(quando, texto) {
@@ -70,19 +74,24 @@ const banco: Banco = {
     falhou("liberar lembrete", error);
   },
   async criarCompromisso(inicio, titulo, avisoEm, textoAviso) {
-    const { error } = await db.rpc("criar_compromisso", {
+    const { data, error } = await db.rpc("criar_compromisso", {
       p_titulo: titulo, p_inicio: inicio.toISOString(), p_aviso_em: avisoEm ? avisoEm.toISOString() : null, p_texto_aviso: textoAviso,
     });
     falhou("criar compromisso", error);
+    return String(data);
+  },
+  async definirEventoGoogle(id, eventoId) {
+    const { error } = await db.from("compromissos").update({ google_evento_id: eventoId }).eq("id", id);
+    falhou("guardar evento do Google", error);
   },
   async compromissosEntre(de, ate) {
-    const { data, error } = await db.from("compromissos").select("id,titulo,inicio").is("cancelado_em", null)
+    const { data, error } = await db.from("compromissos").select(COLUNAS_COMPROMISSO).is("cancelado_em", null)
       .gte("inicio", de.toISOString()).lt("inicio", ate.toISOString()).order("inicio").order("id").limit(100);
     falhou("listar agenda", error);
     return (data ?? []).map(compromisso);
   },
   async proximosCompromissos(desde, limite) {
-    const { data, error } = await db.from("compromissos").select("id,titulo,inicio").is("cancelado_em", null)
+    const { data, error } = await db.from("compromissos").select(COLUNAS_COMPROMISSO).is("cancelado_em", null)
       .gte("inicio", desde.toISOString()).order("inicio").order("id").limit(limite);
     falhou("listar compromissos", error);
     return (data ?? []).map(compromisso);
@@ -122,4 +131,8 @@ Deno.serve(criarHandler({
     return typeof data === "string" ? data : null;
   },
   telegram,
+  google: criarAgendaGoogle({
+    credencialJson: Deno.env.get("GOOGLE_SERVICE_ACCOUNT") ?? "",
+    calendarioId: Deno.env.get("GOOGLE_CALENDAR_ID") ?? "",
+  }),
 }));

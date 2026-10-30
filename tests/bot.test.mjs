@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { criarBot } from "../supabase/functions/telegram-bot/bot.ts";
 import { criarHandler, segredoWebhook, iguais } from "../supabase/functions/telegram-bot/handler.ts";
+import { ErroGoogle } from "../supabase/functions/telegram-bot/google.ts";
 
 const AGORA = new Date("2026-10-30T13:00:00Z"); // sex 30/10 10:00 em Fortaleza
 
@@ -27,8 +28,11 @@ function bancoFalso() {
     async criarCompromisso(inicio, titulo, avisoEm, textoAviso) {
       let aviso = null;
       if (avisoEm) { await this.criarLembrete(avisoEm, textoAviso); aviso = lembretes.at(-1).id; }
-      this.compromissos.push({ id: `c${++seq}`, inicio, titulo, aviso, cancelado: false });
+      const id = `c${++seq}`;
+      this.compromissos.push({ id, inicio, titulo, aviso, cancelado: false, googleId: null });
+      return id;
     },
+    async definirEventoGoogle(id, eventoId) { this.compromissos.find((c) => c.id === id).googleId = eventoId; },
     async compromissosEntre(de, ate) { return this.compromissos.filter((c) => !c.cancelado && c.inicio >= de && c.inicio < ate).sort((a, b) => a.inicio - b.inicio); },
     async proximosCompromissos(desde, n) { return this.compromissos.filter((c) => !c.cancelado && c.inicio >= desde).sort((a, b) => a.inicio - b.inicio).slice(0, n); },
     async desmarcarCompromisso(id) {
@@ -98,6 +102,56 @@ test("agenda: agendar cria aviso 2h antes, consultar agrupa por dia, desmarcar c
   assert.ok(b.lembretes[0].cancelado, "aviso do dentista cancelado junto");
   assert.match(await bot.tratar("desmarcar 9"), /Não há compromisso nº 9/);
   assert.match(await bot.tratar("/ajuda"), /AGENDA \(aviso 2h antes\)/);
+});
+
+// Google Agenda em memoria (mesmo contrato de google.ts).
+function googleFalso() {
+  let seq = 0;
+  const g = {
+    eventos: [], falhar: null,
+    async criar(titulo, inicio, fim) { if (g.falhar) throw g.falhar; const id = `ev${++seq}`; g.eventos.push({ id, titulo, inicio, fim, doBot: true }); return id; },
+    async apagar(id) { if (g.falhar) throw g.falhar; g.eventos = g.eventos.filter((e) => e.id !== id); },
+    async listar(de, ate) {
+      if (g.falhar) throw g.falhar;
+      return g.eventos.filter((e) => !e.doBot && e.inicio < ate && (e.fim ?? e.inicio) > de)
+        .map(({ id, titulo, inicio, diaInteiro }) => ({ id, titulo, inicio, diaInteiro: !!diaInteiro }));
+    },
+  };
+  return g;
+}
+
+test("Google Agenda: agendar cria o evento, listas juntam os eventos de lá, desmarcar apaga", async () => {
+  const b = bancoFalso(), g = googleFalso(), bot = criarBot(b, () => AGORA, g, () => {});
+  // eventos criados direto no Google
+  g.eventos.push({ id: "x1", titulo: "Aniversário Ana", inicio: new Date("2026-10-31T03:00:00Z"), fim: new Date("2026-11-01T03:00:00Z"), diaInteiro: true });
+  g.eventos.push({ id: "x2", titulo: "Academia", inicio: new Date("2026-10-31T21:00:00Z"), fim: new Date("2026-10-31T22:00:00Z") });
+  assert.equal(await bot.tratar("agendar amanhã 10h dentista"), "Agendado: dentista\nsáb 31/10 às 10:00. Aviso 2h antes.\nNo Google Agenda também.");
+  const ev = g.eventos.find((e) => e.doBot);
+  assert.equal(ev.titulo, "dentista");
+  assert.equal(ev.fim - ev.inicio, 3600000, "duração padrão de 1h");
+  assert.equal(b.compromissos[0].googleId, ev.id);
+  assert.equal(await bot.tratar("agenda amanhã"),
+    "Amanhã:\nsáb 31/10\n• dia todo — Aniversário Ana\n1. 10:00 — dentista\n• 18:00 — Academia\n\n• = do Google Agenda (altere por lá)");
+  assert.match(await bot.tratar("/compromissos"), /^Próximos compromissos:\nsáb 31\/10\n• dia todo — Aniversário Ana\n1\. 10:00 — dentista\n• 18:00 — Academia/);
+  assert.equal(await bot.tratar("desmarcar 1"), "Desmarcado: dentista (sáb 31/10 às 10:00)\nTirei do Google Agenda também.");
+  assert.ok(!g.eventos.some((e) => e.doBot), "evento apagado no Google");
+  assert.match(await bot.tratar("/google"), /Google Agenda conectado\. 2 eventos/);
+});
+
+test("Google Agenda fora do ar: o bot continua funcionando e avisa", async () => {
+  const b = bancoFalso(), g = googleFalso(), bot = criarBot(b, () => AGORA, g, () => {});
+  g.falhar = new ErroGoogle("agenda não encontrada. Confira o GOOGLE_CALENDAR_ID.");
+  assert.match(await bot.tratar("agendar amanhã 10h dentista"), /Aviso 2h antes\.\nFicou só aqui: não consegui pôr no Google Agenda \(agenda não encontrada/);
+  assert.equal(b.compromissos.length, 1, "compromisso salvo mesmo assim");
+  assert.equal(b.lembretes.length, 1, "e o aviso também");
+  assert.match(await bot.tratar("agenda amanhã"), /1\. 10:00 — dentista\n\n\(Não consegui ler o Google Agenda: agenda não encontrada/);
+  assert.match(await bot.tratar("/google"), /^Não consegui acessar o Google Agenda: agenda não encontrada/);
+  g.falhar = new Error("detalhe interno que não deve aparecer");
+  assert.match(await bot.tratar("/google"), /o Google Agenda não respondeu\.$/);
+  // sem Google configurado
+  const semGoogle = criarBot(bancoFalso(), () => AGORA);
+  assert.match(await semGoogle.tratar("/google"), /não configurado/);
+  assert.equal(await semGoogle.tratar("agendar amanhã 10h dentista"), "Agendado: dentista\nsáb 31/10 às 10:00. Aviso 2h antes.");
 });
 
 // ---------- Seguranca das chamadas HTTP ----------

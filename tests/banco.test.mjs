@@ -9,7 +9,7 @@ async function banco() {
   await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role BYPASSRLS;
     GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
     CREATE SCHEMA vault; CREATE TABLE vault.decrypted_secrets(name text, decrypted_secret text);`);
-  for (const f of ["0001_inicial.sql", "0003_agenda.sql"]) {
+  for (const f of ["0001_inicial.sql", "0003_agenda.sql", "0004_google.sql"]) {
     const sql = readFileSync(new URL(`../supabase/migrations/${f}`, import.meta.url), "utf8");
     await db.exec(sql);
     await db.exec(sql); // reaplicar nao quebra
@@ -95,4 +95,12 @@ test("agenda: compromisso e aviso juntos; desmarcar cancela o aviso pendente", a
   await sr("SELECT * FROM public.reivindicar_lembretes(10)");
   await sr("SELECT public.desmarcar_compromisso($1)", [id3]);
   assert.equal(await n(db, "SELECT count(*)::int FROM public.lembretes WHERE enviado_em IS NOT NULL AND cancelado_em IS NULL"), 1);
+});
+
+test("google: id do evento guardado no compromisso", async () => {
+  const db = await banco();
+  const id = await comoPapel(db, "service_role", () => n(db, "SELECT public.criar_compromisso('x', now() + interval '1 day', NULL, '')"));
+  await comoPapel(db, "service_role", () => db.query("UPDATE public.compromissos SET google_evento_id = 'ev123' WHERE id = $1", [id]));
+  assert.equal(await n(db, "SELECT google_evento_id FROM public.compromissos WHERE id=$1", [id]), "ev123");
+  await assert.rejects(() => db.query("UPDATE public.compromissos SET google_evento_id = $1", ["x".repeat(1025)]), /check/);
 });

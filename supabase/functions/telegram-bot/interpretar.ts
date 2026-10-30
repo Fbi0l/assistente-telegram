@@ -16,6 +16,7 @@ export type Comando =
   | { tipo: "agendar"; inicio: Date; titulo: string; avisoMin: number | null }
   | { tipo: "agenda"; de: Date; ate: Date; rotulo: string }
   | { tipo: "compromissos" }
+  | { tipo: "google" }
   | { tipo: "desmarcar"; numero: number }
   | { tipo: "erro"; mensagem: string }
   | { tipo: "desconhecido" };
@@ -232,6 +233,7 @@ export function interpretar(mensagem: string, agora: Date): Comando {
 
   // Agenda
   if (cmd === "compromissos") return { tipo: "compromissos" };
+  if (cmd === "google") return { tipo: "google" };
   if (cmd === "agenda") {
     const r = lerDia(tokens.slice(1), agora);
     if (r === null) return { tipo: "erro", mensagem: "Use: agenda, agenda amanhã, agenda semana, agenda sexta ou agenda 15/11" };
